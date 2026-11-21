@@ -232,6 +232,7 @@
   const gImports = L.layerGroup().addTo(map);
   const gOverlays = L.layerGroup().addTo(map);
   const gModel = L.layerGroup().addTo(map);
+  const gAuto = L.layerGroup().addTo(map);
   const gCones = L.layerGroup().addTo(map);
   const gRoute = L.layerGroup().addTo(map);
   const gHeat = L.layerGroup();
@@ -411,7 +412,7 @@
     $$(".tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
     $$(".panel").forEach((p) => p.classList.toggle("active", p.id === "panel-" + name));
     $("#sidebar").classList.remove("collapsed");
-    ({ prop: renderProp, layers: renderLayers, mark: renderMark, intel: renderIntel, plan: renderPlan, log: renderLog, data: renderData })[name]();
+    ({ spots: renderSpots, prop: renderProp, layers: renderLayers, mark: renderMark, intel: renderIntel, plan: renderPlan, log: renderLog, data: renderData })[name]();
     setTimeout(() => map.invalidateSize(), 220);
   }
   $$(".tabs button").forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
@@ -1214,6 +1215,115 @@
     out.textContent = `Cached ${done - fail} tiles${fail ? ` (${fail} failed)` : ""}. They'll load from cache when you're offline.`;
   }
 
+  // ================================================================== AUTO-SCOUT (Spots) panel
+  const KIND_ICON = { island: "⛰️", neck: "⏳", crossing: "🌉", saddle: "🐎", bench: "🪜", point: "📍" };
+  const KIND_COLOR = { island: "#c0392b", neck: "#e056fd", crossing: "#00b0ff", saddle: "#e056fd", bench: "#ffb300", point: "#c0392b" };
+  let spotOpts = { wetPct: 35, useFlood: false, max: 15 };
+  function renderAutoMap() {
+    gAuto.clearLayers();
+    const A = P.auto;
+    if (!A) return;
+    A.candidates.forEach((c, i) => {
+      if (c.dismissed) return;
+      const col = KIND_COLOR[c.kind] || "#ffb300";
+      const html = `<div style="background:${col};color:#fff;border:2px solid #fff;border-radius:50%;width:24px;height:24px;font:700 12px/20px system-ui;text-align:center;box-shadow:0 0 6px #000;${c.addedAs ? "opacity:.45" : ""}">${i + 1}</div>`;
+      L.marker(c.coords, { icon: L.divIcon({ className: "", html, iconSize: [24, 24], iconAnchor: [12, 12] }), zIndexOffset: 500 })
+        .bindTooltip(`#${i + 1} ${KIND_ICON[c.kind] || ""} ${esc(c.title)} · score ${c.score}`, { direction: "top" })
+        .on("click", () => { showTab("spots"); const el = $(`#spot-${i}`); if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); el.classList.add("hl"); } })
+        .addTo(gAuto);
+    });
+  }
+  function spotToFeature(c, as, day) {
+    const notes = `Auto-Scout ${c.title} (score ${c.score}):\n- ${c.reasons.join("\n- ")}${c.setup ? `\nSetup: ${c.setup}` : ""}${c.goodWinds && c.goodWinds.length ? `\nWinds: ${c.goodWinds.join(", ")}` : ""}`;
+    if (as === "stand") return newFeature("stand", "Point", c.coords.slice(), { name: `${c.title} setup`, notes, status: "candidate", manualWinds: (c.goodWinds || []).slice(), day: day || "" });
+    return newFeature("target", "Point", c.coords.slice(), { name: c.title, notes, status: "to check", day: day || "" });
+  }
+  async function runAutoScout() {
+    const out = $("#spotOut");
+    const b = map.getBounds(), spanM = geo.dist([b.getSouth(), b.getWest()], [b.getNorth(), b.getEast()]);
+    if (spanM > 16000) { out.innerHTML = `<p style="color:var(--warn)">Zoom in a bit first. The view is ${(spanM / 1609).toFixed(0)} mi corner to corner. Frame just the unit or property (about 2–8 mi across) for the most detailed analysis.</p>`; return; }
+    if (spanM < 600) { out.innerHTML = `<p style="color:var(--warn)">Zoom out so the whole area you might hunt is in view.</p>`; return; }
+    out.innerHTML = '<p class="muted">Reading the terrain… (a few seconds)</p>';
+    try {
+      const r = await WS.autoscout.autoScout({ south: b.getSouth(), north: b.getNorth(), west: b.getWest(), east: b.getEast() }, P.features,
+        { style: P.terrainStyle, wetPct: spotOpts.wetPct / 100, max: spotOpts.max, floodFt: spotOpts.useFlood ? P.terrain.floodFt : null });
+      P.auto = Object.assign(r, { ran: new Date().toISOString(), bounds: [[b.getSouth(), b.getWest()], [b.getNorth(), b.getEast()]] });
+      save(); renderAutoMap(); renderSpots();
+      toast(`Found ${r.candidates.length} spots worth a look`);
+    } catch (e) { out.innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`; }
+  }
+  function renderSpots() {
+    const el = $("#panel-spots"), A = P.auto;
+    const scoutDays = H.days.filter((d) => d.kind === "scout");
+    const live = A ? A.candidates.filter((c) => !c.dismissed) : [];
+    el.innerHTML = `
+      <h3>🎯 Auto-Scout: find spots for me</h3>
+      <div class="card">
+        <p class="small">Frame the area you'll hunt on the map, then press the button. Auto-Scout reads the elevation and picks out the terrain features that concentrate deer: ${P.terrainStyle === "hill" ? "<b>saddles, benches, and ridge points</b>" : "<b>high-ground bedding islands, land bridges between wet ground, and the narrowest slough crossings</b>"}. Each spot is ranked and explained. It also uses anything you've marked: access (to find low-pressure ground), sign, food, bedding, and no-go areas.</p>
+        <div class="row"><span class="small muted">Terrain</span><b class="small">${TERRAIN_STYLES[P.terrainStyle]}</b><button class="btn small" id="toProp2">change</button></div>
+        ${P.terrainStyle !== "hill" ? `<div class="row"><span class="small muted">Low/wet ground = lowest</span><input type="range" id="wetPct" min="15" max="60" step="5" value="${spotOpts.wetPct}"><span class="small" id="wetV">${spotOpts.wetPct}%</span></div>
+        <label class="row small"><input type="checkbox" id="useFlood" ${spotOpts.useFlood ? "checked" : ""}> Use the Flood slider level instead (${P.terrain.floodFt.toFixed(1)} ft). Good when you know the river stage.</label>` : ""}
+        <div class="row"><span class="small muted">How many spots</span><select id="spotMax">${[8, 12, 15, 20].map((n) => `<option ${spotOpts.max === n ? "selected" : ""}>${n}</option>`).join("")}</select></div>
+        <div class="btn-row"><button class="btn accent" id="runSpots">🔎 Find spots in this view</button>${A ? '<button class="btn small" id="clearSpots">Clear</button>' : ""}</div>
+        <div id="spotOut" class="small">${A ? `<p class="muted">${A.stats.mode === "bottomland" ? `Bottomland mode · ground relief ${A.stats.reliefFt.toFixed(1)} ft · wet line ${A.stats.thrFt.toFixed(1)} ft` : `Hill mode · relief ${A.stats.reliefFt.toFixed(0)} ft`} · ${A.stats.found} features found, top ${A.candidates.length} kept · run ${new Date(A.ran).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</p>` : ""}</div>
+      </div>
+      ${live.length ? `
+      <div class="card hl">
+        <b>Turn these into a plan</b>
+        <p class="small">${scoutDays.length ? `Adds the spots as 🔎 Scout Targets, split across your ${scoutDays.length} scouting day(s) by area so each day covers one part of the property. Spots with workable winds also become 🎯 stand candidates for the hunt. Then use <b>Plan → Plan route</b> for each day.` : "Adds the spots as 🔎 Scout Targets. Add scouting days to your hunt (Property tab) to have them split by day."}</p>
+        <div class="btn-row"><button class="btn small accent" id="addAllSpots">➕ Add all ${live.filter((c) => !c.addedAs).length} to my plan</button><button class="btn small" id="exportSpots">⬇️ KML for onX</button></div>
+      </div>
+      ${A.candidates.map((c, i) => c.dismissed ? "" : `
+      <div class="card" id="spot-${i}" style="${c.addedAs ? "opacity:.6" : ""}">
+        <div class="row"><span style="background:${KIND_COLOR[c.kind]};color:#fff;border-radius:50%;width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:12px">${i + 1}</span>
+          <strong style="flex:1">${KIND_ICON[c.kind] || ""} ${esc(c.title)}</strong><span class="score" style="font-size:16px">${c.score}</span></div>
+        <ul class="small" style="padding-left:18px;margin:6px 0">${c.reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>
+        ${c.setup ? `<p class="small"><b>🎯 Rifle setup idea:</b> ${esc(c.setup)}</p><p class="small"><b>Winds that work:</b> ${(c.goodWinds || []).map((w) => `<span class="pill good">${w}</span>`).join("") || '<span class="pill bad">none clean. Scout it, then hunt the edges</span>'}</p>` : ""}
+        <div class="btn-row">
+          <button class="btn small" data-zoom="${i}">Zoom</button>
+          ${c.addedAs ? `<span class="pill good">added as ${c.addedAs}</span>` : `<button class="btn small" data-add="${i}" data-as="target">＋ Scout target</button>${c.setup ? `<button class="btn small" data-add="${i}" data-as="stand">＋ Stand idea</button>` : ""}`}
+          <button class="btn small ghost" data-dis="${i}">Dismiss</button>
+        </div>
+      </div>`).join("")}` : A ? '<p class="muted small">No strong terrain features found in this view. Try a different wet-ground %, zoom to a different part of the property, or switch terrain style.</p>' : ""}
+      <details class="card small"><summary>How Auto-Scout decides</summary>
+        <p><b>Bottomland:</b> the lowest X% of the ground in view is treated as wet/low. Blobs of ground well above their surroundings become bedding candidates. Dry necks under about 100 yd wide with low ground on both sides become pinch points. Low channels under about 50 yd wide become crossings. Pinch points and crossings near high ground score extra because they connect bedding to everything else.</p>
+        <p><b>Hills:</b> saddles (a low gap with rise on both sides), benches (a flat shelf between steep ground), and ridge points.</p>
+        <p><b>Your marks:</b> spots far from the roads, parking, and ATV trails you've marked score higher (less pressure). Nearby logged sign, food, or bedding adds points. Anything inside a ⛔ No-Go area is dropped.</p>
+        <p><b>Limits:</b> it sees elevation only, not cover, timber type, or openings. Check each spot on satellite imagery (Layers tab) for thickness and shooting lanes, then confirm on foot. Elevation is about 3–10 m resolution, so tiny ditches can be missed.</p>
+      </details>`;
+    $("#toProp2").onclick = () => showTab("prop");
+    if ($("#wetPct")) { $("#wetPct").oninput = (e) => { spotOpts.wetPct = +e.target.value; $("#wetV").textContent = e.target.value + "%"; }; $("#useFlood").onchange = (e) => { spotOpts.useFlood = e.target.checked; }; }
+    $("#spotMax").onchange = (e) => { spotOpts.max = +e.target.value; };
+    $("#runSpots").onclick = runAutoScout;
+    if ($("#clearSpots")) $("#clearSpots").onclick = () => { P.auto = null; save(); renderAutoMap(); renderSpots(); };
+    $$("[data-zoom]", el).forEach((b) => (b.onclick = () => map.setView(A.candidates[+b.dataset.zoom].coords, Math.max(map.getZoom(), 16))));
+    $$("[data-dis]", el).forEach((b) => (b.onclick = () => { A.candidates[+b.dataset.dis].dismissed = true; save(); renderAutoMap(); renderSpots(); }));
+    $$("[data-add]", el).forEach((b) => (b.onclick = () => {
+      const c = A.candidates[+b.dataset.add];
+      spotToFeature(c, b.dataset.as); c.addedAs = b.dataset.as === "stand" ? "stand" : "scout target";
+      save(); renderFeatures(); renderAutoMap(); renderSpots(); toast(`Added #${+b.dataset.add + 1} to your map`);
+    }));
+    if ($("#addAllSpots")) $("#addAllSpots").onclick = () => {
+      const todo = A.candidates.filter((c) => !c.dismissed && !c.addedAs);
+      const groups = WS.autoscout.groupByArea(todo, Math.max(1, scoutDays.length));
+      // order groups so day 1 = the group with the highest-scoring spot
+      const gScore = {}; todo.forEach((c, i) => (gScore[groups[i]] = Math.max(gScore[groups[i]] || 0, c.score)));
+      const order = Object.keys(gScore).sort((a, b) => gScore[b] - gScore[a]).map(Number);
+      let stands = 0;
+      todo.forEach((c, i) => {
+        const day = scoutDays.length ? scoutDays[order.indexOf(groups[i]) % scoutDays.length].date : "";
+        spotToFeature(c, "target", day); c.addedAs = "scout target";
+        if (c.hunt && stands < 8) { spotToFeature(c, "stand", ""); c.addedAs = "scout target + stand idea"; stands++; }
+      });
+      save(); renderFeatures(); renderAutoMap(); renderSpots();
+      toast(`Added ${todo.length} scout targets${scoutDays.length ? ` across ${scoutDays.length} day(s)` : ""} and ${stands} stand ideas. See the Plan tab.`, 4500);
+    };
+    if ($("#exportSpots")) $("#exportSpots").onclick = () => {
+      const fs = live.map((c, i) => ({ type: c.setup ? "funnel" : "target", name: `#${i + 1} ${c.title} (${c.score})`, notes: c.reasons.join(" | ") + (c.setup ? " | Setup: " + c.setup + " | Winds: " + (c.goodWinds || []).join(",") : ""), geom: { type: "Point", coords: c.coords } }));
+      io.download(`${slug(P.name)}-auto-scout.kml`, io.toKML(fs, `Auto-Scout – ${P.name}`), "application/vnd.google-earth.kml+xml");
+    };
+  }
+
   // ================================================================== PROPERTY panel & switching
   const slug = (t) => String(t || "property").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "property";
   function renderPropSelect() {
@@ -1240,7 +1350,7 @@
     gRoute.clearLayers(); gEdit.clearLayers();
     map.setView(P.center || map.getCenter(), P.zoom || map.getZoom());
     syncTerrain(); redrawTerrain();
-    renderImportsOnMap(); await renderOverlaysOnMap(); renderFeatures(); renderModel();
+    renderImportsOnMap(); await renderOverlaysOnMap(); renderFeatures(); renderModel(); renderAutoMap();
     if (map.hasLayer(gHeat)) renderHeat();
     renderCountdown(); renderPropSelect();
     const active = $(".tabs button.active");
@@ -1353,6 +1463,7 @@
   await renderOverlaysOnMap();
   renderFeatures();
   renderModel();
+  renderAutoMap();
   renderLayers();
   if (window.innerWidth < 760) $("#sidebar").classList.add("collapsed");
   setTimeout(() => map.invalidateSize(), 100);

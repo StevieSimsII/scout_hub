@@ -51,7 +51,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .layout { display: flex; height: calc(100% - 52px); }
 .sidebar { width: var(--sidebar); min-width: var(--sidebar); background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; transition: margin .2s; }
 .sidebar.collapsed { margin-left: calc(-1 * var(--sidebar)); }
-.tabs { display: grid; grid-template-columns: repeat(7, 1fr); border-bottom: 1px solid var(--line); }
+.tabs { display: grid; grid-template-columns: repeat(8, 1fr); border-bottom: 1px solid var(--line); }
 .tabs button { background: none; border: 0; padding: 8px 2px 6px; cursor: pointer; display: flex; flex-direction: column; align-items: center; font-size: 16px; color: var(--muted); border-bottom: 2px solid transparent; }
 .tabs button span { font-size: 10px; margin-top: 2px; }
 .tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
