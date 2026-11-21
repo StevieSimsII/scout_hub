@@ -119,7 +119,7 @@
       center: DEFAULT_CENTER, conception: "12-27", gaugeUrl: "https://water.noaa.gov/gauges/vckm6",
       notes: "Issaquena/Warren Cos. Permit cards at the west Ten Point check station on Hwy 465. Your onX export (95 pins/tracks incl. 18 scrapes from Nov 2023) is included: Data → Import → data/onx/ten-point-onx-export.kml.", zoom: 14 });
     p.regs.unshift({ id: uid(), text: "Permit card from the west Ten Point check station (Hwy 465)", done: false });
-    const h = newHunt(p, { name: "Gun draw hunt", scoutStart: "2026-12-14", start: "2026-12-17", end: "2026-12-20" });
+    const h = newHunt(p, { name: "Gun draw hunt", scoutStart: "2026-12-14", start: "2026-12-17", end: "2026-12-20", weapon: "rifle" });
     p.hunts.push(h); p.activeHuntId = h.id;
     return p;
   }
@@ -155,7 +155,10 @@
     P.terrain = Object.assign(defaultTerrain(), P.terrain);
     H = P.hunts.find((h) => h.id === P.activeHuntId) || P.hunts[0] || NO_HUNT;
     window.WS.tz = P.tz;
+    window.WS.weapon = curWeapon();
   }
+  function curWeapon() { return (H && H.weapon) || P.weapon || "rifle"; }
+  function setWeapon(w) { if (H && H.id) H.weapon = w; else P.weapon = w; window.WS.weapon = w; save(); }
   bindActive();
   let saveT = null;
   const save = () => { clearTimeout(saveT); saveT = setTimeout(() => store.set("state", JSON.parse(JSON.stringify(S))).catch((e) => toast("Save failed: " + e.message)), 300); };
@@ -425,7 +428,7 @@
   $("#windSelect").value = S.wind || "";
   $("#windSelect").onchange = (e) => { S.wind = e.target.value; save(); renderCones(); if ($("#panel-intel").classList.contains("active")) renderIntel(); };
   function renderCountdown() {
-    $("#brandSub").textContent = `${P.name}${H.name ? " · " + H.name : ""}${H.start ? " · " + fmtRange(H.start, H.end) : ""}`;
+    $("#brandSub").textContent = `${P.name}${H.name ? " · " + H.name : ""}${H.id ? " " + (WS.autoscout.WEAPONS[curWeapon()] || {}).icon : ""}${H.start ? " · " + fmtRange(H.start, H.end) : ""}`;
     if (!H.start) { $("#countdown").textContent = "No hunt planned"; return; }
     const now = new Date(), hunt = parseDay(H.start), scout = H.scoutStart ? parseDay(H.scoutStart) : hunt, end = parseDay(addDays(H.end, 1));
     const d = (a) => Math.ceil((a - now) / 864e5);
@@ -1322,7 +1325,7 @@
     out.innerHTML = '<p class="muted">Reading the terrain… (a few seconds)</p>';
     try {
       const r = await WS.autoscout.autoScout({ south: b.getSouth(), north: b.getNorth(), west: b.getWest(), east: b.getEast() }, P.features,
-        { style: P.terrainStyle, wetPct: spotOpts.wetPct / 100, max: spotOpts.max, floodFt: spotOpts.useFlood ? P.terrain.floodFt : null, cover: await WS.cover.sampler(P) });
+        { style: P.terrainStyle, wetPct: spotOpts.wetPct / 100, max: spotOpts.max, floodFt: spotOpts.useFlood ? P.terrain.floodFt : null, cover: await WS.cover.sampler(P), weapon: curWeapon() });
       P.auto = Object.assign(r, { ran: new Date().toISOString(), bounds: [[b.getSouth(), b.getWest()], [b.getNorth(), b.getEast()]] });
       save(); renderAutoMap(); renderSpots();
       toast(`Found ${r.candidates.length} spots worth a look`);
@@ -1336,6 +1339,8 @@
       <h3>🎯 Auto-Scout: find spots for me</h3>
       <div class="card">
         <p class="small">Frame the area you'll hunt on the map, then press the button. Auto-Scout reads the elevation and picks out the terrain features that concentrate deer: ${P.terrainStyle === "hill" ? "<b>saddles, benches, and ridge points</b>" : "<b>high-ground bedding islands, land bridges between wet ground, and the narrowest slough crossings</b>"}. Each spot is ranked and explained. It also uses anything you've marked: access (to find low-pressure ground), sign, food, bedding, and no-go areas.</p>
+        <div class="field"><span>Hunting with</span><div class="btn-row">${Object.values(WS.autoscout.WEAPONS).map((wp) => `<button class="btn ${curWeapon() === wp.key ? "on" : ""}" data-wpn="${wp.key}">${wp.icon} ${wp.label}</button>`).join("")}</div>
+          <div class="small muted">${({ bow: "Ranks tight funnels, crossings, and thick-cover edges where deer pass within 15–30 yd. Setups are trees to hang in, with shooting lanes to trim.", muzzle: "Ranks funnels you can cover out to about 150 yd, using openings within that range.", rifle: "Ranks funnels plus openings and cutovers out to about 350 yd for longer shots." })[curWeapon()]}</div></div>
         <div class="row"><span class="small muted">Terrain</span><b class="small">${TERRAIN_STYLES[P.terrainStyle]}</b><button class="btn small" id="toProp2">change</button></div>
         <div class="row small"><span class="muted">Cover data</span>${P.canopy ? '<span class="pill good">🌳 canopy height loaded</span>' : '<span class="pill warn">no canopy data</span>'}${P.overlays.filter((o) => o.analysis).length ? `<span class="pill good">📷 ${P.overlays.filter((o) => o.analysis).length} screenshot(s) analyzed</span>` : ""}<button class="btn small" id="toLayers">${P.canopy ? "view" : "add"}</button></div>
         ${P.canopy ? "" : '<p class="small muted">Without cover data, Auto-Scout uses terrain only. Add canopy height on the Layers tab to find thick bedding cover, edges, and rifle openings.</p>'}
@@ -1343,7 +1348,7 @@
         <label class="row small"><input type="checkbox" id="useFlood" ${spotOpts.useFlood ? "checked" : ""}> Use the Flood slider level instead (${P.terrain.floodFt.toFixed(1)} ft). Good when you know the river stage.</label>` : ""}
         <div class="row"><span class="small muted">How many spots</span><select id="spotMax">${[8, 12, 15, 20].map((n) => `<option ${spotOpts.max === n ? "selected" : ""}>${n}</option>`).join("")}</select></div>
         <div class="btn-row"><button class="btn accent" id="runSpots">🔎 Find spots in this view</button>${A ? '<button class="btn small" id="clearSpots">Clear</button>' : ""}</div>
-        <div id="spotOut" class="small">${A ? `<p class="muted">${A.stats.mode === "bottomland" ? `Bottomland mode · ground relief ${A.stats.reliefFt.toFixed(1)} ft · wet line ${A.stats.thrFt.toFixed(1)} ft` : `Hill mode · relief ${A.stats.reliefFt.toFixed(0)} ft`} · ${A.stats.found} features found, top ${A.candidates.length} kept · run ${new Date(A.ran).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</p>` : ""}</div>
+        <div id="spotOut" class="small">${A && A.stats.weapon && A.stats.weapon !== curWeapon() ? `<p style="color:var(--warn)">These spots were ranked for ${WS.autoscout.WEAPONS[A.stats.weapon].icon} ${WS.autoscout.WEAPONS[A.stats.weapon].label}. Press <b>Find spots</b> to re-rank them for ${WS.autoscout.WEAPONS[curWeapon()].label}.</p>` : ""}${A ? `<p class="muted">${A.stats.weapon ? `Ranked for ${WS.autoscout.WEAPONS[A.stats.weapon].icon} ${WS.autoscout.WEAPONS[A.stats.weapon].label} · ` : ""}${A.stats.mode === "bottomland" ? `Bottomland mode · ground relief ${A.stats.reliefFt.toFixed(1)} ft · wet line ${A.stats.thrFt.toFixed(1)} ft` : `Hill mode · relief ${A.stats.reliefFt.toFixed(0)} ft`} · ${A.stats.found} features found, top ${A.candidates.length} kept · run ${new Date(A.ran).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</p>` : ""}</div>
       </div>
       ${live.length ? `
       <div class="card hl">
@@ -1356,7 +1361,7 @@
         <div class="row"><span style="background:${KIND_COLOR[c.kind]};color:#fff;border-radius:50%;width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:12px">${i + 1}</span>
           <strong style="flex:1">${KIND_ICON[c.kind] || ""} ${esc(c.title)}</strong><span class="score" style="font-size:16px">${c.score}</span></div>
         <ul class="small" style="padding-left:18px;margin:6px 0">${c.reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>
-        ${c.setup ? `<p class="small"><b>🎯 Rifle setup idea:</b> ${esc(c.setup)}</p><p class="small"><b>Winds that work:</b> ${c.windNote ? esc(c.windNote) : (c.goodWinds || []).map((w) => `<span class="pill good">${w}</span>`).join("") || '<span class="pill bad">none clean. Scout it, then hunt the edges</span>'}</p>` : ""}
+        ${c.setup ? `<p class="small"><b>${(WS.autoscout.WEAPONS[A.stats.weapon] || WS.autoscout.WEAPONS.rifle).icon} ${(WS.autoscout.WEAPONS[A.stats.weapon] || WS.autoscout.WEAPONS.rifle).label} setup:</b> ${esc(c.setup)}</p><p class="small"><b>Winds that work:</b> ${c.windNote ? esc(c.windNote) : (c.goodWinds || []).map((w) => `<span class="pill good">${w}</span>`).join("") || '<span class="pill bad">none clean. Scout it, then hunt the edges</span>'}</p>` : ""}
         <div class="btn-row">
           <button class="btn small" data-zoom="${i}">Zoom</button>
           ${c.addedAs ? `<span class="pill good">added as ${c.addedAs}</span>` : `<button class="btn small" data-add="${i}" data-as="target">＋ Scout target</button>${c.setup ? `<button class="btn small" data-add="${i}" data-as="stand">＋ Stand idea</button>` : ""}`}
@@ -1372,6 +1377,7 @@
       </details>`;
     $("#toProp2").onclick = () => showTab("prop");
     $("#toLayers").onclick = () => showTab("layers");
+    $$("[data-wpn]", el).forEach((b) => (b.onclick = () => { setWeapon(b.dataset.wpn); renderSpots(); renderCountdown(); }));
     if ($("#wetPct")) { $("#wetPct").oninput = (e) => { spotOpts.wetPct = +e.target.value; $("#wetV").textContent = e.target.value + "%"; }; $("#useFlood").onchange = (e) => { spotOpts.useFlood = e.target.checked; }; }
     $("#spotMax").onchange = (e) => { spotOpts.max = +e.target.value; };
     $("#runSpots").onclick = runAutoScout;
@@ -1476,7 +1482,7 @@
       <h3>Hunts on this property</h3>
       <div id="huntList">${P.hunts.map((h) => `
         <div class="card ${h.id === H.id ? "hl" : ""}" data-hid="${h.id}">
-          <div class="row"><input type="text" class="hName" value="${esc(h.name)}"><button class="btn small hAct ${h.id === H.id ? "on" : ""}">${h.id === H.id ? "Active" : "Make active"}</button><button class="btn small danger hDel">✕</button></div>
+          <div class="row"><input type="text" class="hName" value="${esc(h.name)}"><select class="hWpn" style="width:130px">${Object.values(WS.autoscout.WEAPONS).map((wp) => `<option value="${wp.key}" ${(h.weapon || "rifle") === wp.key ? "selected" : ""}>${wp.icon} ${wp.label}</option>`).join("")}</select><button class="btn small hAct ${h.id === H.id ? "on" : ""}">${h.id === H.id ? "Active" : "Make active"}</button><button class="btn small danger hDel">✕</button></div>
           <div class="row">
             <div class="field" style="flex:1"><span>Scouting starts</span><input type="date" class="hScout" value="${h.scoutStart}"></div>
             <div class="field" style="flex:1"><span>Hunt starts</span><input type="date" class="hStart" value="${h.start}"></div>
@@ -1512,6 +1518,7 @@
     $$("[data-hid]", el).forEach((card) => {
       const h = P.hunts.find((x) => x.id === card.dataset.hid);
       $(".hName", card).onchange = (e) => { h.name = e.target.value; save(); renderCountdown(); };
+      $(".hWpn", card).onchange = (e) => { h.weapon = e.target.value; bindActive(); save(); renderCountdown(); };
       const dates = () => {
         h.scoutStart = $(".hScout", card).value; h.start = $(".hStart", card).value || h.start; h.end = $(".hEnd", card).value || h.start;
         if (dayDiff(h.start, h.end) < 0) h.end = h.start;
@@ -1525,7 +1532,7 @@
     });
     $("#addHunt").onclick = () => {
       const start = isoDay(new Date(Date.now() + 14 * 864e5));
-      const h = newHunt(P, { name: "Hunt " + (P.hunts.length + 1), scoutStart: addDays(start, -2), start, end: addDays(start, 2) });
+      const h = newHunt(P, { name: "Hunt " + (P.hunts.length + 1), scoutStart: addDays(start, -2), start, end: addDays(start, 2), weapon: curWeapon() });
       P.hunts.push(h); P.activeHuntId = h.id; bindActive(); save(); renderCountdown(); renderProp();
     };
     $$("[data-r]", el).forEach((row) => {

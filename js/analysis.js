@@ -188,7 +188,11 @@
 
     let travel = 0;
     const tdist = Math.min(lane ? lane.d : Infinity, pinch ? pinch.d : Infinity, hot ? hot.d : Infinity);
-    if (tdist <= 40) travel = 25; else if (tdist <= 90) travel = 18; else if (tdist <= 180) travel = 8;
+    // how close the travel needs to pass depends on the weapon
+    const wpn = window.WS.weapon || "rifle";
+    const T = wpn === "bow" ? [25, 40, 80] : wpn === "muzzle" ? [60, 120, 180] : [40, 90, 180];
+    if (tdist <= T[0]) travel = 25; else if (tdist <= T[1]) travel = 15; else if (tdist <= T[2]) travel = 6;
+    if (wpn === "bow" && tdist > T[1] && tdist < 400) notes.push(`🏹 Nearest travel is ${Math.round(tdist * 1.09)} yd away, beyond bow range. Move closer to the trail or funnel.`);
     if ((counts.trail || 0) + (counts.rubline || 0) > 0) travel = Math.min(25, travel + 8);
 
     // wind: scent must not blow toward bedding (within 600 m) or the travel lane / funnel deer approach on

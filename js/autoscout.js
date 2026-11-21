@@ -49,8 +49,30 @@
     return kept;
   }
 
+  // weapon profiles: how close deer must pass, and how far an opening is still useful
+  const WEAPONS = {
+    bow: { key: "bow", label: "Bow", icon: "🏹", openMax: 0, windTol: 50 },
+    muzzle: { key: "muzzle", label: "Muzzleloader", icon: "💥", openMax: 160, windTol: 45 },
+    rifle: { key: "rifle", label: "Rifle", icon: "🎯", openMax: 320, windTol: 40 },
+  };
+  function weaponAdjust(c, WP) {
+    const yd = (m) => Math.round(m * 1.09);
+    if (WP.key === "bow") {
+      if (c.kind === "neck") {
+        if (c.widthM <= 40) { c.score += 10; c.reasons.push(`🏹 Narrow enough (~${yd(c.widthM)} yd) to cover the whole neck from one tree with a bow`); }
+        else if (c.widthM <= 70) { c.score += 3; c.reasons.push(`🏹 At ~${yd(c.widthM)} yd wide, one tree covers most of it. Find the main trail`); }
+        else { c.score -= 8; c.reasons.push(`🏹 Too wide (~${yd(c.widthM)} yd) to cover with a bow until you find the main trail through it`); }
+      } else if (c.kind === "crossing") { c.score += 6; c.reasons.push("🏹 Crossings put deer on a predictable line, ideal for a 15–25 yd bow shot"); }
+      else if (c.kind === "thicket") { c.score += 6; c.reasons.push("🏹 Thick-cover edges bring deer in close during daylight, a classic bow setup"); }
+      else if (c.kind === "saddle" || c.kind === "bench") { c.score += 4; c.reasons.push("🏹 Terrain pinches deer onto one trail, so bow range is realistic"); }
+      else if (c.kind === "island" || c.kind === "point") { c.score += 3; c.reasons.push("🏹 Trails leaving this high ground can put deer in bow range at first and last light"); }
+    } else if (WP.key === "muzzle") {
+      if (c.kind === "neck" && c.widthM <= 110) { c.score += 3; c.reasons.push(`💥 About ${yd(c.widthM)} yd wide: easy to cover with a muzzleloader`); }
+    }
+  }
   async function autoScout(bounds, features, opts) {
-    const o = Object.assign({ style: "bottomland", wetPct: 0.35, max: 15, floodFt: null }, opts);
+    const o = Object.assign({ style: "bottomland", wetPct: 0.35, max: 15, floodFt: null, weapon: "rifle" }, opts);
+    const WP = WEAPONS[o.weapon] || WEAPONS.rifle;
     const g = await terrain.grid(bounds, 260);
     const { w, h } = g, N = w * h, cellM = g.cellM;
     const valid = Array.from(g.data).filter((v) => !isNaN(v)).length;
@@ -264,16 +286,16 @@
         if (f.mature > 0.5 && f.medH >= 18) c.reasons.push("Tall mature canopy on high ground could be an acorn flat. Check for red oaks and overcup still dropping");
       } else if (c.kind !== "thicket") {
         const here = cover.sample(...c.coords);
-        if (here && here.cls === "open") { c.score -= 6; c.reasons.push("The funnel itself is open ground, so expect mostly after-dark crossings unless it's thick on both sides"); }
-        else if (f.regen + f.pole + f.mature > 0.7) { c.score += 4; c.reasons.push("Covered travel: trees or brush on the funnel"); }
+        if (here && here.cls === "open") { c.score -= WP.key === "bow" ? 10 : 6; c.reasons.push("The funnel itself is open ground, so expect mostly after-dark crossings unless it's thick on both sides"); }
+        else if (f.regen + f.pole + f.mature > 0.7) { c.score += WP.key === "bow" ? 8 : 4; c.reasons.push(WP.key === "bow" ? "Covered travel: deer move through here in daylight and close, good for a bow" : "Covered travel: trees or brush on the funnel"); }
         if (f.regen > 0.2 && f.mature > 0.2) { c.score += 6; c.reasons.push("Thicket meets mature timber here. Edges like this are buck travel routes"); }
       }
       // rifle: find the best opening within 300 m (shooting lane / cutover / field edge)
-      if (["neck", "crossing", "saddle", "bench", "thicket"].includes(c.kind)) {
+      if (WP.openMax && ["neck", "crossing", "saddle", "bench", "thicket"].includes(c.kind)) {
         let best = null;
         for (let b = 0; b < 360; b += 22.5) {
           let run = 0, start = null, bestRun = 0, bestStart = null;
-          for (let d = 30; d <= 320; d += 15) {
+          for (let d = 30; d <= WP.openMax; d += 15) {
             const p = geo.dest(c.coords, b, d), v = cover.sample(p[0], p[1]);
             if (v && v.cls === "open" && !isWaterAt(p)) { if (start == null) start = d; run += 15; if (run > bestRun) { bestRun = run; bestStart = start; } }
             else { run = 0; start = null; }
@@ -283,7 +305,7 @@
         if (best) {
           c.opening = best;
           c.score += 5;
-          c.reasons.push(`Opening about ${Math.round(best.at * 1.09)} yd ${geo.compass(best.b)}, roughly ${Math.round(best.len * 1.09)} yd across. That's a rifle lane or cutover edge to watch the funnel from`);
+          c.reasons.push(`Opening about ${Math.round(best.at * 1.09)} yd ${geo.compass(best.b)}, roughly ${Math.round(best.len * 1.09)} yd across. That's a ${WP.label.toLowerCase()} lane or cutover edge to watch the funnel from`);
         }
       }
     }
@@ -312,6 +334,7 @@
         if (ni && ni.d < 500) { c.score += 10; c.bedRef = ni.i.coords; c.reasons.push(`${Math.round(ni.d * 1.09)} yd from a high-ground bedding candidate, so it connects bedding to the rest of the bottom`); }
       }
       if (cover) coverReasons(c);
+      weaponAdjust(c, WP);
       c.score = Math.round(c.score);
     });
     all.sort((a, b) => b.score - a.score);
@@ -330,14 +353,27 @@
       if (c.axis != null) sensitive.push(c.axis, (c.axis + 180) % 360); // deer approach from both ends
       const bedB = c.bedRef ? geo.bearing(c.coords, c.bedRef) : null;
       if (bedB != null) sensitive.push(bedB);
-      c.goodWinds = WINDS.filter((wd) => { const scent = (WIND_DEG[wd] + 180) % 360; return !sensitive.some((b) => geo.angDiff(scent, b) < 40); });
+      c.goodWinds = WINDS.filter((wd) => { const scent = (WIND_DEG[wd] + 180) % 360; return !sensitive.some((b) => geo.angDiff(scent, b) < WP.windTol); });
       if (c.kind === "thicket") {
         c.goodWinds = WINDS.slice();
-        c.setup = c.opening
-          ? `Sit the downwind edge of the thicket where you can see the opening ${Math.round(c.opening.at * 1.09)} yd ${geo.compass(c.opening.b)}. Bucks scent-check the edge during the rut, and you get a rifle shot across the opening.`
+        c.setup = WP.key === "bow"
+          ? "Hang a stand 15–25 yd off the downwind edge, on a trail entering the thicket. Go 20+ ft up and trim 2–3 shooting lanes to the trail. Bucks scent-check this edge during the rut."
+          : c.opening
+          ? `Sit the downwind edge of the thicket where you can see the opening ${Math.round(c.opening.at * 1.09)} yd ${geo.compass(c.opening.b)}. Bucks scent-check the edge during the rut, and you get a ${WP.label.toLowerCase()} shot across the opening.`
           : "Sit the downwind edge on a trail entering the thicket. Pick your spot by the day's wind, and keep your scent from blowing into the cover.";
         c.windNote = "Any wind works if you choose the downwind side that day";
         c.hunt = true;
+        return;
+      }
+      const travel = c.axis != null ? `${geo.compass(c.axis)}–${geo.compass((c.axis + 180) % 360)}` : null;
+      if (WP.key === "bow") {
+        c.setup = `Hang 15–25 yd off the ${c.kind === "crossing" ? "crossing" : "narrowest part of the funnel"}${bedB != null ? " on the side away from the bedding" : ""}, downwind of the main trail${travel ? ` (travel runs ${travel})` : ""}. Trim 2–3 shooting lanes to the trail.${c.kind === "neck" && c.widthM > 40 ? ` At about ${Math.round(c.widthM * 1.09)} yd wide, find the main trail first and set up on it.` : ""}`;
+        c.hunt = c.goodWinds.length > 0;
+        return;
+      }
+      if (WP.key === "muzzle") {
+        c.setup = `Set up 30–100 yd off the funnel${bedB != null ? " on the side away from the bedding" : ""}, with a lane down the travel line${travel ? ` (${travel})` : ""}.${c.opening ? ` Opening ${Math.round(c.opening.at * 1.09)} yd ${geo.compass(c.opening.b)} makes a good lane.` : " Look for a gap or edge giving you 60–120 yd of visibility."}`;
+        c.hunt = c.goodWinds.length > 0;
         return;
       }
       c.setup = c.axis != null
@@ -346,7 +382,7 @@
       if (c.opening) c.setup += ` Best lane found: an opening ${Math.round(c.opening.at * 1.09)} yd ${geo.compass(c.opening.b)} of the funnel.`;
       c.hunt = c.goodWinds.length > 0;
     });
-    return { candidates: top, stats: { cover: cover ? { canopy: cover.hasCanopy, shots: cover.shots } : null, reliefFt, mode: flat ? "bottomland" : "hill", thrFt: thr != null ? thr * FT : null, cellM, found: all.length } };
+    return { candidates: top, stats: { weapon: WP.key, cover: cover ? { canopy: cover.hasCanopy, shots: cover.shots } : null, reliefFt, mode: flat ? "bottomland" : "hill", thrFt: thr != null ? thr * FT : null, cellM, found: all.length } };
   }
 
   // split spots into n day-groups by location (k-means) so each scouting day covers one area
@@ -371,5 +407,5 @@
     return asg;
   }
 
-  window.WS = Object.assign(window.WS || {}, { autoscout: { autoScout, groupByArea } });
+  window.WS = Object.assign(window.WS || {}, { autoscout: { autoScout, groupByArea, WEAPONS } });
 })();
