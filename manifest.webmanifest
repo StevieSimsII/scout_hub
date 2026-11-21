@@ -1,0 +1,9 @@
+{
+  "name": "Scout Hub",
+  "short_name": "Scout Hub",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#14170f",
+  "theme_color": "#14170f",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}
