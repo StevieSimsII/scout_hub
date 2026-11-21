@@ -60,9 +60,9 @@
      Pairs: each bedding area → its 2 nearest food sources; in rut mode also bedding ↔ bedding (buck cruising). */
   async function modelCorridors(features, opts) {
     const o = Object.assign({ rut: true, useFlood: false, floodFt: 85, lowWeight: 4, maxPairDistM: 3500 }, opts);
-    let beds = ofType(features, "bedding");
+    let beds = ofType(features, "bedding", "bedpt");
     if (!beds.length) beds = ofType(features, "thicket");
-    const foods = ofType(features, "food");
+    const foods = ofType(features, "food", "foodpt");
     if (!beds.length) throw new Error("Draw at least one Bedding Area (or Thicket) polygon first.");
     if (!foods.length && !(o.rut && beds.length > 1)) throw new Error("Draw at least one Food polygon (or two bedding areas with rut mode on).");
 
@@ -172,7 +172,7 @@
     signs.forEach((x) => (counts[x.f.type] = (counts[x.f.type] || 0) + 1));
     ofType(features, "trail", "rubline").forEach((f) => { if (geo.distToFeature(p, f).d < 60) counts[f.type] = (counts[f.type] || 0) + 1; });
 
-    const bed = nearest(["bedding"]), food = nearest(["food"]), pinch = nearest(["funnel", "crossing"]);
+    const bed = nearest(["bedding", "bedpt"]), food = nearest(["food", "foodpt"]), pinch = nearest(["funnel", "crossing"]);
     let lane = null;
     if (model) model.paths.forEach((pa) => { const n = geo.nearestOnLine(p, pa.coords); if (!lane || n.d < lane.d) lane = { ...n, path: pa }; });
     const hot = model ? model.hotspots.map((h) => ({ h, d: geo.dist(p, h.coords) })).sort((a, b) => a.d - b.d)[0] : null;
@@ -193,7 +193,7 @@
 
     // wind: scent must not blow toward bedding (within 600 m) or the travel lane / funnel deer approach on
     const sensitive = [];
-    ofType(features, "bedding").forEach((f) => { const n = geo.distToFeature(p, f); if (n.d > 0 && n.d < 600) sensitive.push({ b: geo.bearing(p, geo.featureAnchor(f)), why: "bedding" }); });
+    ofType(features, "bedding", "bedpt").forEach((f) => { const n = geo.distToFeature(p, f); if (n.d > 0 && n.d < 600) sensitive.push({ b: geo.bearing(p, geo.featureAnchor(f)), why: "bedding" }); });
     if (lane && lane.d > 15 && lane.d < 200) sensitive.push({ b: geo.bearing(p, lane.pt), why: "travel lane" });
     if (pinch && pinch.d > 15 && pinch.d < 200) sensitive.push({ b: geo.bearing(p, pinch.pt), why: "funnel/crossing" });
     ofType(features, "trail").forEach((f) => { const n = geo.distToFeature(p, f); if (n.d > 15 && n.d < 120) sensitive.push({ b: geo.bearing(p, n.pt), why: "deer trail" }); });

@@ -292,7 +292,7 @@
     const byType = (...t) => features.filter((f) => t.includes(f.type));
     const access = byType("parking", "boat", "road", "atv", "check");
     const signs = byType("rub", "scrape", "tracks", "bed", "sighting", "buck", "trail", "rubline");
-    const foods = byType("food"), beds = byType("bedding", "thicket"), nogo = byType("nogo");
+    const foods = byType("food", "foodpt"), beds = byType("bedding", "bedpt", "thicket"), nogo = byType("nogo");
     all = all.filter((c) => !nogo.some((f) => f.geom.type === "Polygon" && geo.pointInPoly(c.coords, f.geom.coords)));
     all.forEach((c) => {
       c.score = c.base;

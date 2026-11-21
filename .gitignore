@@ -1,3 +1,6 @@
 *-backup-*.json
 .DS_Store
 Thumbs.db
+
+# personal onX pins/tracks: keep out of the (public) repo unless you choose to
+data/onx/

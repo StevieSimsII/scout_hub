@@ -20,7 +20,7 @@
     private: ["Written permission / landowner contact on you", "Boundary lines walked and marked on the map", "Neighbor contacts and where their stands are", "Gate codes / lock combos", "Emergency address for 911", "Harvest rules (QDM, doe limits)", "Baiting/feeding legal in this state and county?"],
     lease: ["Lease agreement & club rules on you", "Sign-in board / stand assignment rules", "Club harvest rules (points, spread, does)", "Guest rules", "Boundary lines & neighbors", "Gate codes, camp rules, emergency address", "Food plot / feeder rules"],
   };
-  const DEFAULT_CENTER = [32.5, -90.97];
+  const DEFAULT_CENTER = [32.47, -90.912]; // Ten Point unit core, from the "10 pt unit" pins in your onX export
 
   // ================================================================== dates & time zones
   const parseDay = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
@@ -116,8 +116,8 @@
   }
   function tenPointExample() {
     const p = newProperty({ name: "Phil Bryant WMA – Ten Point", landType: "wma", state: "MS", tz: "America/Chicago", terrainStyle: "bottomland",
-      center: DEFAULT_CENTER, zoom: 13, conception: "12-27", gaugeUrl: "https://water.noaa.gov/gauges/vckm6",
-      notes: "Issaquena/Warren Cos. Permit cards at the west Ten Point check station on Hwy 465. Default map center is approximate — import your onX boundary and Set home view." });
+      center: DEFAULT_CENTER, conception: "12-27", gaugeUrl: "https://water.noaa.gov/gauges/vckm6",
+      notes: "Issaquena/Warren Cos. Permit cards at the west Ten Point check station on Hwy 465. Your onX export (95 pins/tracks incl. 18 scrapes from Nov 2023) is included: Data → Import → data/onx/ten-point-onx-export.kml.", zoom: 14 });
     p.regs.unshift({ id: uid(), text: "Permit card from the west Ten Point check station (Hwy 465)", done: false });
     const h = newHunt(p, { name: "Gun draw hunt", scoutStart: "2026-12-14", start: "2026-12-17", end: "2026-12-20" });
     p.hunts.push(h); p.activeHuntId = h.id;
@@ -1177,6 +1177,7 @@
         <p class="small">• <b>onX</b>: export waypoints/tracks/areas as <b>KML</b> or <b>GPX</b> (onX Web Map → My Content → select → Export). KMZ and GeoJSON also work.<br>
         • <b>Images</b> (PNG/JPG screenshots of onX satellite/topo/hybrid) become draggable map overlays.<br>
         • <b>.json</b> backups from this app restore everything.</p>
+        ${P.name.includes("Ten Point") ? '<div class="btn-row"><button class="btn small" id="impIncluded">📥 Import my Ten Point onX export (included)</button></div>' : ""}
         <div id="impOut" class="small muted"></div>
       </div>
       <h3>Export (send to onX / your hunting partner)</h3>
@@ -1204,6 +1205,12 @@
         <p>Rules change every year and differ between WMAs, refuges, national forests, and private ground. Work through the rules checklist on the Property tab against the current brochure, refuge hunt plan, or lease agreement.</p>
         <p class="muted">Elevation: AWS Terrain Tiles (USGS 3DEP and others). Imagery: Esri, USGS NAIP. Forecast: NWS. Rut model: MDWFP mean conception date (you enter it).</p>
       </div>`;
+    if ($("#impIncluded")) $("#impIncluded").onclick = async () => {
+      try {
+        const txt = await (await fetch("data/onx/ten-point-onx-export.kml")).text();
+        await importFiles([new File([txt], "ten-point-onx-export.kml", { type: "application/vnd.google-earth.kml+xml" })]);
+      } catch (e) { toast("Couldn't load it here. Open the app via GitHub Pages/localhost, or import data/onx/ten-point-onx-export.kml with Import files.", 6000); }
+    };
     $("#impFile").onchange = (e) => importFiles([...e.target.files]).finally(() => (e.target.value = ""));
     $$("[data-x]", p).forEach((b) => (b.onclick = () => doExport(b.dataset.x)));
     $("#backup").onclick = backup;

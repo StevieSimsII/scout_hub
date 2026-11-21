@@ -28,7 +28,7 @@
 
   // Guess one of our types from an imported feature's name/description + geometry.
   const RULES = [
-    [/scrape/i, "scrape"], [/rub ?line/i, "rubline"], [/\brub/i, "rub"], [/track/i, "tracks"], [/\bbed(s|ding)?\b/i, "bedding"],
+    [/scrape/i, "scrape"], [/\brun\b|deer trail/i, "trail"], [/rub ?line/i, "rubline"], [/\brub/i, "rub"], [/track/i, "tracks"], [/\bbed(s|ding)?\b/i, "bedding"],
     [/stand|blind|ladder|climb|set ?up|lock ?on/i, "stand"], [/cam(era)?\b|cell ?cam/i, "camera"], [/buck/i, "buck"], [/deer|doe/i, "sighting"],
     [/park|gate/i, "parking"], [/boat|ramp|launch/i, "boat"], [/check ?station/i, "check"], [/atv|utv|4 ?wheel/i, "atv"],
     [/levee|road|hwy|highway/i, "road"], [/crossing|ford/i, "crossing"], [/funnel|pinch|saddle/i, "funnel"],
@@ -36,7 +36,17 @@
     [/slough|lake|pond|bayou|brake|water/i, "water"], [/ridge|high ground|bench/i, "ridge"], [/entry|in route|walk in/i, "entry"],
     [/exit|out route/i, "exit"], [/trail/i, "foot"],
   ];
+  // onX Hunt exports put the marker icon in ExtendedData "icon"
+  const ONX_ICONS = {
+    "scrape": "scrape", "rub": "rub", "tree stand": "stand", "ladder stand": "stand", "blind": "stand", "ground blind": "stand", "climbing stand": "stand",
+    "feeding area": "foodpt", "food plot": "foodpt", "food source": "foodpt", "bedding area": "bedpt", "buck whitetail": "buck", "deer": "sighting",
+    "doe whitetail": "sighting", "tracks": "tracks", "trail camera": "camera", "camera": "camera", "saddle": "funnel", "funnel": "funnel", "pinch point": "funnel",
+    "access": "parking", "truck": "parking", "parking": "parking", "gate": "parking", "boat ramp": "boat", "crossing": "crossing", "water": "crossing",
+  };
   function guessType(props, gtype) {
+    const icon = String(props.icon || "").toLowerCase();
+    if (gtype === "Point" && ONX_ICONS[icon]) return ONX_ICONS[icon];
+    if (gtype === "LineString" && /^track \d/i.test(props.name || "")) return "walked";
     const txt = `${props.name || ""} ${props.description || ""} ${props.desc || ""} ${props.sym || ""}`;
     const want = gtype === "Point" ? "point" : gtype === "Polygon" ? "area" : "line";
     for (const [re, t] of RULES) if (re.test(txt) && TYPE[t].geom === want) return t;

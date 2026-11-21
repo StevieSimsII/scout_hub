@@ -20,6 +20,8 @@
     { id: "food", label: "Food (acorn flat, ag, plot)", icon: "🌰", color: "#f39c12", geom: "area", group: "Habitat" },
     { id: "water", label: "Open Water / Slough", icon: "💧", color: "#2980b9", geom: "area", group: "Habitat" },
     { id: "ridge", label: "Ridge / High Ground", icon: "⛰️", color: "#a1887f", geom: "line", group: "Habitat" },
+    { id: "foodpt", label: "Food / Feeding (pin)", icon: "🌽", color: "#f39c12", geom: "point", group: "Habitat" },
+    { id: "bedpt", label: "Bedding (pin)", icon: "🛏️", color: "#c0392b", geom: "point", group: "Habitat" },
     { id: "crossing", label: "Slough Crossing", icon: "🌉", color: "#5dade2", geom: "point", group: "Habitat" },
     { id: "funnel", label: "Funnel / Pinch", icon: "⏳", color: "#e056fd", geom: "point", group: "Habitat" },
 
@@ -44,6 +46,7 @@
     { id: "note", label: "Note", icon: "📝", color: "#ffffff", geom: "point", group: "Plan" },
     { id: "zone", label: "Area (general)", icon: "🔷", color: "#74b9ff", geom: "area", group: "Plan" },
     { id: "path", label: "Line (general)", icon: "➖", color: "#dfe6e9", geom: "line", group: "Plan" },
+    { id: "walked", label: "My GPS Track", icon: "👣", color: "#90caf9", geom: "line", group: "Plan", dash: "2 4" },
   ];
   const TYPE = Object.fromEntries(TYPES.map((t) => [t.id, t]));
 
