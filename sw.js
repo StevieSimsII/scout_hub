@@ -1,7 +1,7 @@
 /* Offline support: app shell is network-first (so updates land), map/elevation tiles are cache-first. */
-const APP_CACHE = "scout-hub-app-v2";
+const APP_CACHE = "scout-hub-app-v3";
 const TILE_CACHE = "scout-hub-tiles-v1";
-const APP_FILES = ["./", "index.html", "styles.css", "manifest.webmanifest", "js/core.js", "js/astro.js", "js/terrain.js", "js/analysis.js", "js/autoscout.js", "js/io.js", "js/app.js",
+const APP_FILES = ["./", "index.html", "styles.css", "manifest.webmanifest", "js/core.js", "js/astro.js", "js/terrain.js", "js/analysis.js", "js/cover.js", "js/autoscout.js", "js/io.js", "js/app.js",
   "vendor/leaflet.js", "vendor/leaflet.css", "vendor/togeojson.umd.js", "vendor/jszip.min.js"];
 const TILE_HOSTS = ["server.arcgisonline.com", "basemap.nationalmap.gov", "tile.opentopomap.org", "s3.amazonaws.com"];
 

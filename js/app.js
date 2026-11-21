@@ -393,7 +393,9 @@
     if (sel) select(null);
     $("#readout").textContent = `${fmt.ll(p)} · elev …`;
     const el = await terrain.elevationAt(p[0], p[1]);
-    $("#readout").textContent = `${fmt.ll(p)} · elev ${el == null ? "n/a" : (el * terrain.FT).toFixed(1) + " ft"}`;
+    let cv = "";
+    if (P.canopy) { const r = await WS.cover.canopyRaster(P.canopy); const hgt = r && r.at(p[0], p[1]); if (hgt != null) cv = ` · trees ${hgt} m (${({ open: "open", regen: "thick young growth", pole: "pole timber", mature: "mature timber" })[WS.cover.classOf(hgt)]})`; }
+    $("#readout").textContent = `${fmt.ll(p)} · elev ${el == null ? "n/a" : (el * terrain.FT).toFixed(1) + " ft"}${cv}`;
   }
   document.addEventListener("keydown", (e) => {
     if (e.target.matches("input, textarea, select")) return;
@@ -472,6 +474,9 @@
         <p class="muted small">Blue = under water at that ground elevation, <span style="color:#ffe600">yellow</span> = last dry ground. When a river backs water into the bottoms, deer pile onto those yellow islands and ridges. Elevations are approximate (USGS 3DEP via AWS Terrain Tiles); calibrate by tapping a known waterline.</p>
       </div>
 
+      <h3>Cover: tree canopy height</h3>
+      <div class="card" id="canopyBox"></div>
+
       <h3>Imported onX layers</h3>
       <div class="card" id="importList"></div>
 
@@ -491,6 +496,7 @@
     $("#hi").onchange = (e) => { P.terrain.hi = +e.target.value; save(); redrawTerrain([reliefL]); };
     $("#floodFt").oninput = (e) => { P.terrain.floodFt = +e.target.value; $("#floodV").textContent = (+e.target.value).toFixed(1) + " ft"; save(); redrawTerrain([floodL]); };
     $("#autoRange").onclick = autoRange;
+    renderCanopyBox();
     renderImportList(); renderOverlayList();
   }
   async function autoRange() {
@@ -572,6 +578,7 @@
       const url = URL.createObjectURL(blob);
       const img = L.imageOverlay(url, o.bounds, { opacity: o.opacity, pane: "overlayImg", interactive: false }).addTo(gOverlays);
       overlayObjs.set(o.id, img);
+      if (o.analysis && o.analysis.show) { const au = await WS.cover.shotImageURL(o); if (au) L.imageOverlay(au, o.bounds, { opacity: 0.9, pane: "overlayImg", interactive: false }).addTo(gOverlays); }
     }
     if (overlayEdit) overlayHandles(overlayEdit);
   }
@@ -595,6 +602,53 @@
     });
     [sw, ne, mv].forEach((m) => m.on("dragend", () => { save(); upd(); }));
   }
+  // ---------- canopy height layer
+  let canopyLayer = null;
+  async function renderCanopyOnMap() {
+    if (canopyLayer) { map.removeLayer(canopyLayer); canopyLayer = null; }
+    if (!P.canopy || !P.canopyShow) return;
+    const url = await WS.cover.canopyImageURL(P.canopy);
+    if (!url) return;
+    canopyLayer = L.imageOverlay(url, P.canopy.bounds, { opacity: P.canopyOpacity ?? 0.6, pane: "overlayImg", interactive: false }).addTo(map);
+  }
+  function renderCanopyBox() {
+    const el = $("#canopyBox");
+    if (!el) return;
+    const C = P.canopy;
+    el.innerHTML = C ? `
+      <label class="row"><input type="checkbox" id="cnShow" ${P.canopyShow ? "checked" : ""}> <b>Show canopy height</b></label>
+      <div class="row"><span class="small muted">Opacity</span><input type="range" id="cnOp" min="0.1" max="1" step="0.05" value="${P.canopyOpacity ?? 0.6}"></div>
+      ${WS.cover.CLASSES.map((c) => `<div class="small"><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:rgba(${c.color.slice(0, 3).join(",")},0.9);vertical-align:-2px"></span> ${c.label}</div>`).join("")}
+      <p class="muted small">${esc(C.name || "")} · ${C.width}×${C.height} cells at ${C.resM} m · ${esc(C.source || "")}</p>
+      <div class="btn-row"><button class="btn small" id="cnZoom">Zoom to coverage</button><button class="btn small danger" id="cnDel">Remove</button></div>` : `
+      <p class="small">Tree height (about 1 m source data) shows <b>thick young growth</b> (bedding cover), <b>mature timber</b>, <b>openings</b>, and the <b>edges</b> between them. Auto-Scout uses it automatically once it's loaded.</p>
+      <div class="btn-row"><button class="btn small accent" id="cnBundled">🌳 Load Phil Bryant WMA area (included)</button></div>
+      <p class="muted small">For other properties, run <code>tools/canopy_pack.py</code> with the property's bounding box (see README), then import the <code>.canopy.json</code> file on the Data tab.</p>`;
+    if (!C) {
+      $("#cnBundled").onclick = async () => {
+        try {
+          toast("Loading canopy data (~7 MB)…");
+          const pack = await (await fetch("data/phil-bryant-area.canopy.json")).json();
+          await attachCanopy(pack);
+        } catch (e) { toast("Couldn't load the bundled file. Open the app via a web address (GitHub Pages or localhost), not by double-clicking index.html, or import the file from the data folder on the Data tab.", 7000); }
+      };
+      return;
+    }
+    $("#cnShow").onchange = (e) => { P.canopyShow = e.target.checked; save(); renderCanopyOnMap(); };
+    $("#cnOp").oninput = (e) => { P.canopyOpacity = +e.target.value; if (canopyLayer) canopyLayer.setOpacity(P.canopyOpacity); save(); };
+    $("#cnZoom").onclick = () => map.fitBounds(C.bounds);
+    $("#cnDel").onclick = async () => { if (!confirm("Remove canopy data from this property?")) return; await store.delBlob(C.blobKey); P.canopy = null; save(); renderCanopyOnMap(); renderCanopyBox(); };
+  }
+  async function attachCanopy(pack) {
+    if (P.canopy) await store.delBlob(P.canopy.blobKey);
+    P.canopy = await WS.cover.importCanopyPack(pack);
+    P.canopyShow = true; save();
+    await renderCanopyOnMap(); renderCanopyBox();
+    const c = map.getCenter(), b = P.canopy.bounds;
+    if (c.lat < b[0][0] || c.lat > b[1][0] || c.lng < b[0][1] || c.lng > b[1][1]) map.fitBounds(b);
+    toast("Canopy height loaded. Auto-Scout will now use cover.");
+  }
+
   function renderOverlayList() {
     const el = $("#overlayList");
     if (!el) return;
@@ -605,16 +659,30 @@
         <div class="card" data-id="${o.id}" style="margin:8px 0 0">
           <div class="row"><input type="checkbox" class="vis" ${o.visible ? "checked" : ""}><label>${esc(o.name)}</label>
             <button class="btn small edit ${overlayEdit === o.id ? "on" : ""}">${overlayEdit === o.id ? "Lock" : "Align"}</button>
+            <button class="btn small ana" title="Find openings and water in this image for Auto-Scout">${o.analysis ? "Re-analyze" : "Analyze"}</button>
             <button class="btn small danger del">✕</button></div>
           <div class="row"><span class="small muted">Opacity</span><input type="range" class="op" min="0.05" max="1" step="0.05" value="${o.opacity}"></div>
-        </div>`).join("")}`;
+          ${o.analysis ? `<label class="row small"><input type="checkbox" class="anaShow" ${o.analysis.show ? "checked" : ""}> Show analysis: <span style="color:#ffd600">■ openings ${Math.round(o.analysis.pct.open * 100)}%</span> <span style="color:#1e8cff">■ water ${Math.round(o.analysis.pct.water * 100)}%</span></label>` : ""}
+        </div>`).join("")}
+      <p class="muted small">Align the screenshot first, then press <b>Analyze</b>. It marks openings (fields, cutovers, roads) and water by color and texture, and Auto-Scout uses them for rifle lanes and newer cuts. Satellite or hybrid screenshots work best. Topo screenshots won't analyze well.</p>`;
     $("#ovFile").onchange = async (e) => { for (const f of e.target.files) await addOverlay(f); e.target.value = ""; };
     $$("[data-id]", el).forEach((row) => {
       const o = P.overlays.find((x) => x.id === row.dataset.id);
       $(".vis", row).onchange = (e) => { o.visible = e.target.checked; save(); renderOverlaysOnMap(); };
       $(".op", row).oninput = (e) => { o.opacity = +e.target.value; const im = overlayObjs.get(o.id); if (im) im.setOpacity(o.opacity); save(); };
       $(".edit", row).onclick = () => { overlayEdit = overlayEdit === o.id ? null : o.id; if (overlayEdit) { o.visible = true; map.fitBounds(o.bounds, { padding: [30, 30] }); } renderOverlaysOnMap(); renderOverlayList(); };
-      $(".del", row).onclick = async () => { if (!confirm(`Delete overlay "${o.name}"?`)) return; await store.delBlob(o.blobKey); P.overlays = P.overlays.filter((x) => x !== o); if (overlayEdit === o.id) overlayEdit = null; save(); renderOverlaysOnMap(); renderOverlayList(); };
+      $(".ana", row).onclick = async () => {
+        toast("Analyzing screenshot…");
+        const blob = await store.getBlob(o.blobKey);
+        const r = await WS.cover.analyzeScreenshot(blob);
+        if (o.analysis) { WS.cover.forgetShot(o); await store.delBlob(o.analysis.blobKey); }
+        const key = "an_" + uid(); await store.setBlob(key, r.pngBlob);
+        o.analysis = { blobKey: key, pct: r.pct, show: true, at: new Date().toISOString() };
+        save(); renderOverlaysOnMap(); renderOverlayList();
+        toast(`Found ${Math.round(r.pct.open * 100)}% openings and ${Math.round(r.pct.water * 100)}% water. Re-align and re-analyze if the corners move.`, 4500);
+      };
+      if ($(".anaShow", row)) $(".anaShow", row).onchange = (e) => { o.analysis.show = e.target.checked; save(); renderOverlaysOnMap(); };
+      $(".del", row).onclick = async () => { if (!confirm(`Delete overlay "${o.name}"?`)) return; if (o.analysis) await store.delBlob(o.analysis.blobKey); await store.delBlob(o.blobKey); P.overlays = P.overlays.filter((x) => x !== o); if (overlayEdit === o.id) overlayEdit = null; save(); renderOverlaysOnMap(); renderOverlayList(); };
     });
   }
   async function addOverlay(file) {
@@ -1149,6 +1217,7 @@
         if (file.type.startsWith("image/")) { await addOverlay(file); msgs.push(`🖼️ ${file.name}: overlay added. Align it on the map`); continue; }
         const r = await io.readGeoFile(file);
         if (r.backup) { await restore(r.backup); msgs.push(`💾 Restored backup ${file.name}`); continue; }
+        if (r.canopy) { await attachCanopy(r.canopy); msgs.push(`🌳 ${file.name}: canopy height loaded into ${P.name}`); continue; }
         const n = r.geojson.features.length;
         const colors = ["#ffeb3b", "#00e5ff", "#ff4081", "#76ff03", "#ff9100", "#e040fb"];
         const imp = { id: uid(), name: r.name, geojson: r.geojson, color: colors[P.imports.length % colors.length], visible: true };
@@ -1216,8 +1285,8 @@
   }
 
   // ================================================================== AUTO-SCOUT (Spots) panel
-  const KIND_ICON = { island: "⛰️", neck: "⏳", crossing: "🌉", saddle: "🐎", bench: "🪜", point: "📍" };
-  const KIND_COLOR = { island: "#c0392b", neck: "#e056fd", crossing: "#00b0ff", saddle: "#e056fd", bench: "#ffb300", point: "#c0392b" };
+  const KIND_ICON = { thicket: "🌿", island: "⛰️", neck: "⏳", crossing: "🌉", saddle: "🐎", bench: "🪜", point: "📍" };
+  const KIND_COLOR = { thicket: "#2e7d32", island: "#c0392b", neck: "#e056fd", crossing: "#00b0ff", saddle: "#e056fd", bench: "#ffb300", point: "#c0392b" };
   let spotOpts = { wetPct: 35, useFlood: false, max: 15 };
   function renderAutoMap() {
     gAuto.clearLayers();
@@ -1246,7 +1315,7 @@
     out.innerHTML = '<p class="muted">Reading the terrain… (a few seconds)</p>';
     try {
       const r = await WS.autoscout.autoScout({ south: b.getSouth(), north: b.getNorth(), west: b.getWest(), east: b.getEast() }, P.features,
-        { style: P.terrainStyle, wetPct: spotOpts.wetPct / 100, max: spotOpts.max, floodFt: spotOpts.useFlood ? P.terrain.floodFt : null });
+        { style: P.terrainStyle, wetPct: spotOpts.wetPct / 100, max: spotOpts.max, floodFt: spotOpts.useFlood ? P.terrain.floodFt : null, cover: await WS.cover.sampler(P) });
       P.auto = Object.assign(r, { ran: new Date().toISOString(), bounds: [[b.getSouth(), b.getWest()], [b.getNorth(), b.getEast()]] });
       save(); renderAutoMap(); renderSpots();
       toast(`Found ${r.candidates.length} spots worth a look`);
@@ -1261,6 +1330,8 @@
       <div class="card">
         <p class="small">Frame the area you'll hunt on the map, then press the button. Auto-Scout reads the elevation and picks out the terrain features that concentrate deer: ${P.terrainStyle === "hill" ? "<b>saddles, benches, and ridge points</b>" : "<b>high-ground bedding islands, land bridges between wet ground, and the narrowest slough crossings</b>"}. Each spot is ranked and explained. It also uses anything you've marked: access (to find low-pressure ground), sign, food, bedding, and no-go areas.</p>
         <div class="row"><span class="small muted">Terrain</span><b class="small">${TERRAIN_STYLES[P.terrainStyle]}</b><button class="btn small" id="toProp2">change</button></div>
+        <div class="row small"><span class="muted">Cover data</span>${P.canopy ? '<span class="pill good">🌳 canopy height loaded</span>' : '<span class="pill warn">no canopy data</span>'}${P.overlays.filter((o) => o.analysis).length ? `<span class="pill good">📷 ${P.overlays.filter((o) => o.analysis).length} screenshot(s) analyzed</span>` : ""}<button class="btn small" id="toLayers">${P.canopy ? "view" : "add"}</button></div>
+        ${P.canopy ? "" : '<p class="small muted">Without cover data, Auto-Scout uses terrain only. Add canopy height on the Layers tab to find thick bedding cover, edges, and rifle openings.</p>'}
         ${P.terrainStyle !== "hill" ? `<div class="row"><span class="small muted">Low/wet ground = lowest</span><input type="range" id="wetPct" min="15" max="60" step="5" value="${spotOpts.wetPct}"><span class="small" id="wetV">${spotOpts.wetPct}%</span></div>
         <label class="row small"><input type="checkbox" id="useFlood" ${spotOpts.useFlood ? "checked" : ""}> Use the Flood slider level instead (${P.terrain.floodFt.toFixed(1)} ft). Good when you know the river stage.</label>` : ""}
         <div class="row"><span class="small muted">How many spots</span><select id="spotMax">${[8, 12, 15, 20].map((n) => `<option ${spotOpts.max === n ? "selected" : ""}>${n}</option>`).join("")}</select></div>
@@ -1278,7 +1349,7 @@
         <div class="row"><span style="background:${KIND_COLOR[c.kind]};color:#fff;border-radius:50%;width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:12px">${i + 1}</span>
           <strong style="flex:1">${KIND_ICON[c.kind] || ""} ${esc(c.title)}</strong><span class="score" style="font-size:16px">${c.score}</span></div>
         <ul class="small" style="padding-left:18px;margin:6px 0">${c.reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>
-        ${c.setup ? `<p class="small"><b>🎯 Rifle setup idea:</b> ${esc(c.setup)}</p><p class="small"><b>Winds that work:</b> ${(c.goodWinds || []).map((w) => `<span class="pill good">${w}</span>`).join("") || '<span class="pill bad">none clean. Scout it, then hunt the edges</span>'}</p>` : ""}
+        ${c.setup ? `<p class="small"><b>🎯 Rifle setup idea:</b> ${esc(c.setup)}</p><p class="small"><b>Winds that work:</b> ${c.windNote ? esc(c.windNote) : (c.goodWinds || []).map((w) => `<span class="pill good">${w}</span>`).join("") || '<span class="pill bad">none clean. Scout it, then hunt the edges</span>'}</p>` : ""}
         <div class="btn-row">
           <button class="btn small" data-zoom="${i}">Zoom</button>
           ${c.addedAs ? `<span class="pill good">added as ${c.addedAs}</span>` : `<button class="btn small" data-add="${i}" data-as="target">＋ Scout target</button>${c.setup ? `<button class="btn small" data-add="${i}" data-as="stand">＋ Stand idea</button>` : ""}`}
@@ -1289,9 +1360,11 @@
         <p><b>Bottomland:</b> the lowest X% of the ground in view is treated as wet/low. Blobs of ground well above their surroundings become bedding candidates. Dry necks under about 100 yd wide with low ground on both sides become pinch points. Low channels under about 50 yd wide become crossings. Pinch points and crossings near high ground score extra because they connect bedding to everything else.</p>
         <p><b>Hills:</b> saddles (a low gap with rise on both sides), benches (a flat shelf between steep ground), and ridge points.</p>
         <p><b>Your marks:</b> spots far from the roads, parking, and ATV trails you've marked score higher (less pressure). Nearby logged sign, food, or bedding adds points. Anything inside a ⛔ No-Go area is dropped.</p>
-        <p><b>Limits:</b> it sees elevation only, not cover, timber type, or openings. Check each spot on satellite imagery (Layers tab) for thickness and shooting lanes, then confirm on foot. Elevation is about 3–10 m resolution, so tiny ditches can be missed.</p>
+        <p><b>Cover (when loaded):</b> canopy height splits the ground into open (under 2 m), thick young growth (2–8 m: regen, cutovers, plantings, brush), pole timber (8–15 m), and mature timber (15 m+). Thick patches on dry ground become bedding candidates. High ground with thick growth scores up, and open high ground scores down. Funnels score up where thicket meets mature timber. For rifle setups, it searches 30–320 m around each funnel for the longest opening to shoot across. Your analyzed onX screenshots add newer openings and water.</p>
+        <p><b>Limits:</b> it can't tell tree species or acorn crop, and canopy height is from about 2020 imagery, so recent cuts may be missing (analyze a current onX screenshot to catch them). Elevation is about 3–10 m resolution. Confirm everything on foot.</p>
       </details>`;
     $("#toProp2").onclick = () => showTab("prop");
+    $("#toLayers").onclick = () => showTab("layers");
     if ($("#wetPct")) { $("#wetPct").oninput = (e) => { spotOpts.wetPct = +e.target.value; $("#wetV").textContent = e.target.value + "%"; }; $("#useFlood").onchange = (e) => { spotOpts.useFlood = e.target.checked; }; }
     $("#spotMax").onchange = (e) => { spotOpts.max = +e.target.value; };
     $("#runSpots").onclick = runAutoScout;
@@ -1350,7 +1423,7 @@
     gRoute.clearLayers(); gEdit.clearLayers();
     map.setView(P.center || map.getCenter(), P.zoom || map.getZoom());
     syncTerrain(); redrawTerrain();
-    renderImportsOnMap(); await renderOverlaysOnMap(); renderFeatures(); renderModel(); renderAutoMap();
+    renderImportsOnMap(); await renderOverlaysOnMap(); renderFeatures(); renderModel(); renderAutoMap(); renderCanopyOnMap();
     if (map.hasLayer(gHeat)) renderHeat();
     renderCountdown(); renderPropSelect();
     const active = $(".tabs button.active");
@@ -1359,7 +1432,8 @@
   async function deleteProperty(p) {
     if (S.properties.length === 1) return toast("Keep at least one property. Rename this one instead.");
     if (!confirm(`Delete "${p.name}" and ALL its markers, overlays, photos and hunts? This can't be undone.`)) return;
-    for (const o of p.overlays) await store.delBlob(o.blobKey);
+    for (const o of p.overlays) { await store.delBlob(o.blobKey); if (o.analysis) await store.delBlob(o.analysis.blobKey); }
+    if (p.canopy) await store.delBlob(p.canopy.blobKey);
     for (const f of p.features) for (const k of f.photos || []) await store.delBlob(k);
     S.properties = S.properties.filter((x) => x !== p);
     S.activePropertyId = S.properties[0].id; save();
@@ -1464,6 +1538,7 @@
   renderFeatures();
   renderModel();
   renderAutoMap();
+  renderCanopyOnMap();
   renderLayers();
   if (window.innerWidth < 760) $("#sidebar").classList.add("collapsed");
   setTimeout(() => map.invalidateSize(), 100);

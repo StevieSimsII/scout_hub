@@ -68,11 +68,12 @@
 
     // ---------------------------------------------------------------- flat / bottomland
     let thr = null;
+    const flatW = new Uint8Array(N); // open water (hydro-flattened DEM), filled in bottomland mode
+    const isWaterAt = (p) => { const [i, j] = g.fromLatLng(p[0], p[1]); return flatW[j * w + i] === 1; };
     if (flat) {
       thr = o.floodFt != null ? o.floodFt / FT : terrain.percentile(sm, o.wetPct);
       const dry = (k) => sm[k] > thr, wet = (k) => !(sm[k] > thr);
       // open water: DEMs are hydro-flattened, so lakes/rivers read as dead-flat surfaces
-      const flatW = new Uint8Array(N);
       for (let y = 2; y < h - 2; y++) for (let x = 2; x < w - 2; x++) {
         const k = y * w + x; let mn = 1e9, mx = -1e9;
         for (let j = -2; j <= 2; j++) for (let i = -2; i <= 2; i++) { const v = g.data[k + j * w + i]; if (v < mn) mn = v; if (v > mx) mx = v; }
@@ -183,6 +184,38 @@
     }
 
     // ---------------------------------------------------------------- de-dupe and describe
+    // ---------------------------------------------------------------- thick-cover patches (needs canopy data)
+    const cover = o.cover;
+    if (cover && cover.hasCanopy) {
+      const isRegen = new Uint8Array(N);
+      for (let k = 0; k < N; k++) {
+        const v = cover.sample(...LL(k));
+        if (v && v.cls === "regen" && (thr == null || sm[k] > thr)) isRegen[k] = 1;
+      }
+      const seen = new Uint8Array(N);
+      for (let k = 0; k < N; k++) {
+        if (!isRegen[k] || seen[k]) continue;
+        const stack = [k], cells = []; seen[k] = 1;
+        while (stack.length) {
+          const c = stack.pop(); cells.push(c);
+          const x = c % w, y = (c / w) | 0;
+          for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const nx = x + dx, ny = y + dy, nk = ny * w + nx;
+            if (nx >= 0 && ny >= 0 && nx < w && ny < h && !seen[nk] && isRegen[nk]) { seen[nk] = 1; stack.push(nk); }
+          }
+        }
+        const acres = (cells.length * cellM * cellM) / 4046.86;
+        if (acres < 3) continue;
+        // pick the cell deepest inside the patch (most regen neighbors) as the marker
+        let best = cells[0], bestN = -1;
+        cells.forEach((c) => { let n = 0; for (let j = -2; j <= 2; j++) for (let i = -2; i <= 2; i++) n += isRegen[c + j * w + i] || 0; if (n > bestN) { bestN = n; best = c; } });
+        const lift = thr != null ? (sm[best] - thr) * FT : null;
+        cands.push({ kind: "thicket", coords: LL(best), acres, base: 24 + Math.min(10, acres / 4), title: "Thick-cover patch (bedding?)",
+          reasons: [`About ${acres.toFixed(0)} ac of thick young growth, 2–8 m tall (regen, cutover, plantings, or brush)${lift != null ? `, on dry ground ${lift.toFixed(1)} ft above the wet line` : ""}`,
+            "Does bed in the thickest cover close to food, and bucks cruise its downwind edge during the rut",
+            "Walk the downwind edge only. Look for trails entering, beds, and rubs, and don't push through the middle"] });
+      }
+    }
     const islands = cands.filter((c) => c.kind === "island");
     let funnels = suppress(cands.filter((c) => c.kind === "neck"), 260, (a, b) => a.widthM < b.widthM).slice(0, 25);
     let crossings = suppress(cands.filter((c) => c.kind === "crossing"), 260, (a, b) => a.widthM < b.widthM).slice(0, 25);
@@ -203,7 +236,57 @@
     saddles.forEach((c) => { c.title = "Saddle"; c.base = 30 + Math.min(8, c.relief / 5); c.reasons = [`Low gap in a ridge with about ${Math.round(c.relief)} ft of rise on either side`, "Deer cross ridges at saddles to save energy, a classic rut crossing", "Look for trails converging through the low point"]; });
     benches.forEach((c) => { c.title = "Side-hill bench"; c.base = 22; c.reasons = ["Flat shelf with steep ground above and below", "Bucks travel benches to cruise a hillside downwind of bedding", "Check for a trail along the bench and rubs on the uphill side"]; });
     points.forEach((c) => { c.title = "Ridge point (bedding?)"; c.base = 20; c.reasons = [`Point sitting ${c.lift.toFixed(0)} ft above the surrounding ground`, "Bucks bed on points with the wind at their back and a view below", "Approach from below with care, and look for beds near the tip"]; });
-    let all = islands.concat(funnels, crossings, saddles, benches, points);
+    const thickets = suppress(cands.filter((c) => c.kind === "thicket"), 350, (a, b) => a.acres > b.acres).slice(0, 15);
+    let all = islands.concat(thickets, funnels, crossings, saddles, benches, points);
+
+    // ---------------------------------------------------------------- cover-aware reasoning
+    function around(c, rM) {
+      const f = { open: 0, regen: 0, pole: 0, mature: 0, water: 0, canopy: 0, n: 0 }, hs = [];
+      for (let dy = -rM; dy <= rM; dy += rM / 3) for (let dx = -rM; dx <= rM; dx += rM / 3) {
+        if (dx * dx + dy * dy > rM * rM) continue;
+        const p = [c.coords[0] + dy / 110540, c.coords[1] + dx / (111320 * Math.cos(c.coords[0] * Math.PI / 180))];
+        const v = cover.sample(p[0], p[1]);
+        if (!v || !v.cls) continue;
+        f[v.cls]++; f.n++; if (v.h != null && v.cls !== "water") hs.push(v.h);
+      }
+      if (f.n) Object.keys(f).forEach((k) => { if (k !== "n") f[k] /= f.n; });
+      f.medH = hs.length ? hs.sort((a, b) => a - b)[hs.length >> 1] : null;
+      return f;
+    }
+    function coverReasons(c) {
+      const f = around(c, c.kind === "island" || c.kind === "point" ? 90 : 50);
+      if (!f.n) return;
+      const pct = (x) => Math.round(x * 100);
+      if (c.kind === "island" || c.kind === "point") {
+        if (f.regen > 0.35) { c.score += 12; c.reasons.push(`${pct(f.regen)}% thick young growth (2–8 m): bedding cover on high ground, the best combination`); }
+        else if (f.open > 0.5) { c.score -= 10; c.reasons.push(`Mostly open ground (${pct(f.open)}%), so deer likely won't bed here in daylight`); }
+        else if (f.mature > 0.6) { c.score -= 3; c.reasons.push(`Mostly mature timber (${pct(f.mature)}%, ~${f.medH} m tall). Likely an open understory, better for travel and acorns than bedding`); }
+        if (f.mature > 0.5 && f.medH >= 18) c.reasons.push("Tall mature canopy on high ground could be an acorn flat. Check for red oaks and overcup still dropping");
+      } else if (c.kind !== "thicket") {
+        const here = cover.sample(...c.coords);
+        if (here && here.cls === "open") { c.score -= 6; c.reasons.push("The funnel itself is open ground, so expect mostly after-dark crossings unless it's thick on both sides"); }
+        else if (f.regen + f.pole + f.mature > 0.7) { c.score += 4; c.reasons.push("Covered travel: trees or brush on the funnel"); }
+        if (f.regen > 0.2 && f.mature > 0.2) { c.score += 6; c.reasons.push("Thicket meets mature timber here. Edges like this are buck travel routes"); }
+      }
+      // rifle: find the best opening within 300 m (shooting lane / cutover / field edge)
+      if (["neck", "crossing", "saddle", "bench", "thicket"].includes(c.kind)) {
+        let best = null;
+        for (let b = 0; b < 360; b += 22.5) {
+          let run = 0, start = null, bestRun = 0, bestStart = null;
+          for (let d = 30; d <= 320; d += 15) {
+            const p = geo.dest(c.coords, b, d), v = cover.sample(p[0], p[1]);
+            if (v && v.cls === "open" && !isWaterAt(p)) { if (start == null) start = d; run += 15; if (run > bestRun) { bestRun = run; bestStart = start; } }
+            else { run = 0; start = null; }
+          }
+          if (bestRun >= 45 && (!best || bestRun > best.len)) best = { b, len: bestRun, at: bestStart };
+        }
+        if (best) {
+          c.opening = best;
+          c.score += 5;
+          c.reasons.push(`Opening about ${Math.round(best.at * 1.09)} yd ${geo.compass(best.b)}, roughly ${Math.round(best.len * 1.09)} yd across. That's a rifle lane or cutover edge to watch the funnel from`);
+        }
+      }
+    }
 
     // ---------------------------------------------------------------- weigh in your marks
     const byType = (...t) => features.filter((f) => t.includes(f.type));
@@ -228,6 +311,7 @@
         const ni = nearIsland(c);
         if (ni && ni.d < 500) { c.score += 10; c.bedRef = ni.i.coords; c.reasons.push(`${Math.round(ni.d * 1.09)} yd from a high-ground bedding candidate, so it connects bedding to the rest of the bottom`); }
       }
+      if (cover) coverReasons(c);
       c.score = Math.round(c.score);
     });
     all.sort((a, b) => b.score - a.score);
@@ -241,18 +325,28 @@
 
     // ---------------------------------------------------------------- rifle setup ideas at the best funnels
     top.forEach((c) => {
-      if (!["neck", "crossing", "saddle", "bench"].includes(c.kind)) return;
+      if (!["neck", "crossing", "saddle", "bench", "thicket"].includes(c.kind)) return;
       const sensitive = [];
       if (c.axis != null) sensitive.push(c.axis, (c.axis + 180) % 360); // deer approach from both ends
       const bedB = c.bedRef ? geo.bearing(c.coords, c.bedRef) : null;
       if (bedB != null) sensitive.push(bedB);
       c.goodWinds = WINDS.filter((wd) => { const scent = (WIND_DEG[wd] + 180) % 360; return !sensitive.some((b) => geo.angDiff(scent, b) < 40); });
+      if (c.kind === "thicket") {
+        c.goodWinds = WINDS.slice();
+        c.setup = c.opening
+          ? `Sit the downwind edge of the thicket where you can see the opening ${Math.round(c.opening.at * 1.09)} yd ${geo.compass(c.opening.b)}. Bucks scent-check the edge during the rut, and you get a rifle shot across the opening.`
+          : "Sit the downwind edge on a trail entering the thicket. Pick your spot by the day's wind, and keep your scent from blowing into the cover.";
+        c.windNote = "Any wind works if you choose the downwind side that day";
+        c.hunt = true;
+        return;
+      }
       c.setup = c.axis != null
         ? `Set up 40–120 yd off the funnel on the side${bedB != null ? " away from the bedding" : ""}, with a shooting lane down the travel line (it runs ${geo.compass(c.axis)}–${geo.compass((c.axis + 180) % 360)}). Look for an opening, cutover edge, or long hardwood lane to stretch a rifle shot.`
         : "Set up off to the downwind side, where you can see the crossing and the trails feeding it.";
+      if (c.opening) c.setup += ` Best lane found: an opening ${Math.round(c.opening.at * 1.09)} yd ${geo.compass(c.opening.b)} of the funnel.`;
       c.hunt = c.goodWinds.length > 0;
     });
-    return { candidates: top, stats: { reliefFt, mode: flat ? "bottomland" : "hill", thrFt: thr != null ? thr * FT : null, cellM, found: all.length } };
+    return { candidates: top, stats: { cover: cover ? { canopy: cover.hasCanopy, shots: cover.shots } : null, reliefFt, mode: flat ? "bottomland" : "hill", thrFt: thr != null ? thr * FT : null, cellM, found: all.length } };
   }
 
   // split spots into n day-groups by location (k-means) so each scouting day covers one area

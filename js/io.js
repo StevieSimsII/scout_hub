@@ -18,6 +18,7 @@
     if (ext === "json" || ext === "geojson") {
       const j = JSON.parse(await file.text());
       if (j && (j.scoutHubBackup || j.wmaScoutBackup)) return { name, backup: j };
+      if (j && j.type === "scouthub-canopy") return { name, canopy: j };
       if (j.type === "FeatureCollection") return { name, geojson: j };
       if (j.type === "Feature") return { name, geojson: { type: "FeatureCollection", features: [j] } };
       throw new Error("JSON isn't GeoJSON or a Scout Hub backup.");
