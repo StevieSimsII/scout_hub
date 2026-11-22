@@ -9,6 +9,7 @@
     { id: "parking", label: "Parking / Gate", icon: "🅿️", color: "#e8e8e8", geom: "point", group: "Access" },
     { id: "boat", label: "Boat Launch", icon: "🚤", color: "#4fb3ff", geom: "point", group: "Access" },
     { id: "check", label: "Check Station", icon: "🏁", color: "#ffd166", geom: "point", group: "Access" },
+    { id: "boundary", label: "Hunt Unit Boundary", icon: "🟦", color: "#00e5ff", geom: "area", group: "Access", dash: "8 5" },
     { id: "atv", label: "ATV Trail", icon: "🛻", color: "#ff9f1c", geom: "line", group: "Access", dash: "8 6" },
     { id: "foot", label: "Foot Trail", icon: "🥾", color: "#f4e285", geom: "line", group: "Access", dash: "2 6" },
     { id: "road", label: "Road / Levee", icon: "🛣️", color: "#bdbdbd", geom: "line", group: "Access" },

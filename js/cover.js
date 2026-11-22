@@ -80,7 +80,7 @@
   // ---------------------------------------------------------------- screenshot analysis
   // Classes: 0 unknown, 1 canopy/vegetation, 2 opening, 3 water. Uses color + local texture (std-dev of
   // brightness): fields/cutovers/roads are smooth & light; water is dark & smooth or bluish; timber is textured.
-  async function analyzeScreenshot(blob) {
+  async function analyzeScreenshot(blob, opts = {}) {
     const bm = await createImageBitmap(blob);
     const scale = Math.min(1, 1400 / Math.max(bm.width, bm.height));
     const w = Math.round(bm.width * scale), h = Math.round(bm.height * scale);
@@ -115,7 +115,7 @@
       out[y * w + x] = cnt.indexOf(Math.max(...cnt));
     }
     // ignore onX UI chrome near the edges (buttons, scale bars)
-    const m = Math.round(Math.min(w, h) * 0.03);
+    const m = Math.round(Math.min(w, h) * (opts.edge ?? 0.03));
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (x < m || y < m || x >= w - m || y >= h - m) out[y * w + x] = 0;
     const counts = [0, 0, 0, 0]; out.forEach((v) => counts[v]++);
     // store as PNG (value * 60 to keep it viewable/debuggable)

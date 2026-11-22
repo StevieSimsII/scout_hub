@@ -91,7 +91,8 @@
     // ---------------------------------------------------------------- flat / bottomland
     let thr = null;
     const flatW = new Uint8Array(N); // open water (hydro-flattened DEM), filled in bottomland mode
-    const isWaterAt = (p) => { const [i, j] = g.fromLatLng(p[0], p[1]); return flatW[j * w + i] === 1; };
+    // open water, or (in bottomland) ground below the wet line: muddy flood water looks like a field in photos
+    const isWaterAt = (p) => { const [i, j] = g.fromLatLng(p[0], p[1]), k = j * w + i; return flatW[k] === 1 || (thr != null && sm[k] < thr); };
     if (flat) {
       thr = o.floodFt != null ? o.floodFt / FT : terrain.percentile(sm, o.wetPct);
       const dry = (k) => sm[k] > thr, wet = (k) => !(sm[k] > thr);
@@ -316,6 +317,13 @@
     const signs = byType("rub", "scrape", "tracks", "bed", "sighting", "buck", "trail", "rubline");
     const foods = byType("food", "foodpt"), beds = byType("bedding", "bedpt", "thicket"), nogo = byType("nogo");
     all = all.filter((c) => !nogo.some((f) => f.geom.type === "Polygon" && geo.pointInPoly(c.coords, f.geom.coords)));
+    const unitBounds = byType("boundary").filter((f) => f.geom.type === "Polygon");
+    let dropped = 0;
+    if (unitBounds.length) {
+      const n0 = all.length;
+      all = all.filter((c) => unitBounds.some((f) => geo.pointInPoly(c.coords, f.geom.coords)));
+      dropped = n0 - all.length;
+    }
     all.forEach((c) => {
       c.score = c.base;
       if (access.length) {
@@ -382,7 +390,7 @@
       if (c.opening) c.setup += ` Best lane found: an opening ${Math.round(c.opening.at * 1.09)} yd ${geo.compass(c.opening.b)} of the funnel.`;
       c.hunt = c.goodWinds.length > 0;
     });
-    return { candidates: top, stats: { weapon: WP.key, cover: cover ? { canopy: cover.hasCanopy, shots: cover.shots } : null, reliefFt, mode: flat ? "bottomland" : "hill", thrFt: thr != null ? thr * FT : null, cellM, found: all.length } };
+    return { candidates: top, stats: { outside: typeof dropped === "number" ? dropped : 0, boundary: byType("boundary").length > 0, weapon: WP.key, cover: cover ? { canopy: cover.hasCanopy, shots: cover.shots } : null, reliefFt, mode: flat ? "bottomland" : "hill", thrFt: thr != null ? thr * FT : null, cellM, found: all.length } };
   }
 
   // split spots into n day-groups by location (k-means) so each scouting day covers one area

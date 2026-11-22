@@ -51,6 +51,19 @@ Cover classes: open (<2 m), **thick young growth** (2–8 m: regen, cutovers, pl
 
 Neither source can identify tree species or acorn crop. Confirm those on foot.
 
+## Grok/onX photo sets (auto-placed)
+
+If you have a folder of onX web screenshots plus a `coordinates.txt` that lists each file's map-center lat/long and the zoom (for example, Grok's capture set), select **everything in the folder at once** on the **Data** tab (`Ctrl+A` in the file picker). The app:
+- reads `coordinates.txt` and places every photo at its exact spot. It knows onX's web layout (100 px left sidebar, 512 px Mapbox tiles), crops off the onX buttons, and groups the photos on the Layers tab.
+- reads `habitat_notes.md` and shows each photo's notes under the nearby Auto-Scout spots.
+- imports any KML in the folder (your pins, the unit boundary, a plan).
+
+On the Layers tab, **Analyze all** marks openings and water in the photos for Auto-Scout.
+
+## Hunt unit boundary
+
+Draw or import a **Hunt Unit Boundary** area, and Auto-Scout drops any spot outside it. The Ten Point boundary (traced from onX, about 10–20 m accuracy) is in `data/ten-point-boundary.kml`, or press **Add Ten Point unit boundary** on the Data tab.
+
 ## Getting onX data in
 
 1. In onX Web Map: My Content → select → **Export** (KML or GPX).

@@ -28,7 +28,7 @@
 
   // Guess one of our types from an imported feature's name/description + geometry.
   const RULES = [
-    [/scrape/i, "scrape"], [/\brun\b|deer trail/i, "trail"], [/rub ?line/i, "rubline"], [/\brub/i, "rub"], [/track/i, "tracks"], [/\bbed(s|ding)?\b/i, "bedding"],
+    [/unit boundary|wma boundary|hunt unit|boundary/i, "boundary"], [/scrape/i, "scrape"], [/\brun\b|deer trail/i, "trail"], [/rub ?line/i, "rubline"], [/\brub/i, "rub"], [/track/i, "tracks"], [/\bbed(s|ding)?\b/i, "bedding"],
     [/stand|blind|ladder|climb|set ?up|lock ?on/i, "stand"], [/cam(era)?\b|cell ?cam/i, "camera"], [/buck/i, "buck"], [/deer|doe/i, "sighting"],
     [/park|gate/i, "parking"], [/boat|ramp|launch/i, "boat"], [/check ?station/i, "check"], [/atv|utv|4 ?wheel/i, "atv"],
     [/levee|road|hwy|highway/i, "road"], [/crossing|ford/i, "crossing"], [/funnel|pinch|saddle/i, "funnel"],
@@ -59,9 +59,14 @@
     if (!g) return out;
     const props = gf.properties || {};
     const push = (type, coords) => {
-      const t = guessType(props, type);
-      out.push({ id: uid(), type: t, name: props.name || "", notes: stripHtml(props.description || props.desc || ""),
-        created: props.time || new Date().toISOString(), geom: { type, coords }, imported: true });
+      const want = type === "Point" ? "point" : type === "Polygon" ? "area" : "line";
+      const t = props.scouthub_type && TYPE[props.scouthub_type] && TYPE[props.scouthub_type].geom === want ? props.scouthub_type : guessType(props, type);
+      const f = { id: uid(), type: t, name: props.scouthub_name || props.name || "", notes: stripHtml(props.scouthub_notes || props.notes || props.description || props.desc || ""),
+        created: props.time || new Date().toISOString(), geom: { type, coords }, imported: true };
+      if (props.scouthub_day) f.day = props.scouthub_day;
+      if (props.scouthub_status) f.status = props.scouthub_status;
+      if (props.scouthub_winds) f.manualWinds = String(props.scouthub_winds).split(",").filter(Boolean);
+      out.push(f);
     };
     const ll = (c) => [c[1], c[0]];
     if (g.type === "Point") push("Point", ll(g.coordinates));
@@ -114,7 +119,9 @@
       if (f.geom.type === "Point") g = `<Point><coordinates>${c(f.geom.coords)}</coordinates></Point>`;
       else if (f.geom.type === "LineString") g = `<LineString><tessellate>1</tessellate><coordinates>${f.geom.coords.map(c).join(" ")}</coordinates></LineString>`;
       else g = `<Polygon><outerBoundaryIs><LinearRing><coordinates>${f.geom.coords.concat([f.geom.coords[0]]).map(c).join(" ")}</coordinates></LinearRing></outerBoundaryIs></Polygon>`;
-      return `<Placemark><name>${esc(label(f))}</name><description>${esc(f.notes || "")}</description><styleUrl>#s_${f.type}</styleUrl>${g}</Placemark>`;
+      const xd = [["scouthub_type", f.type], ["scouthub_name", f.name], ["scouthub_notes", f.notes], ["scouthub_day", f.day], ["scouthub_status", f.status], ["scouthub_winds", (f.manualWinds || []).join(",")]]
+        .filter(([, v]) => v).map(([k, v]) => `<Data name="${k}"><value>${esc(v)}</value></Data>`).join("");
+      return `<Placemark><name>${esc(label(f))}</name><description>${esc(f.notes || "")}</description><styleUrl>#s_${f.type}</styleUrl>${xd ? `<ExtendedData>${xd}</ExtendedData>` : ""}${g}</Placemark>`;
     }).join("\n");
     return `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>${esc(docName)}</name>\n${styles}\n${pms}\n</Document></kml>\n`;
   }

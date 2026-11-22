@@ -287,7 +287,8 @@
       } else if (f.geom.type === "LineString") {
         l = L.polyline(f.geom.coords, { color: t.color, weight: isSel ? 6 : 4, dashArray: t.dash, opacity: 0.95 });
       } else {
-        l = L.polygon(f.geom.coords, { color: t.color, weight: isSel ? 3 : 2, fillOpacity: isSel ? 0.3 : 0.16, dashArray: t.dash });
+        const bnd = f.type === "boundary";
+        l = L.polygon(f.geom.coords, { color: t.color, weight: bnd ? 3 : isSel ? 3 : 2, fillOpacity: bnd ? (isSel ? 0.08 : 0.02) : isSel ? 0.3 : 0.16, dashArray: t.dash, interactive: !bnd || isSel || !!draw });
       }
       l.on("click", (e) => { L.DomEvent.stopPropagation(e); if (draw) return onMapClick(e); select(f.id); });
       l.bindTooltip(`${t.icon} ${esc(f.name || t.label)}`, { sticky: true, direction: "top", opacity: 0.9 });
@@ -658,7 +659,16 @@
     el.innerHTML = `
       <label class="btn small accent file-btn">➕ Add screenshot<input type="file" id="ovFile" accept="image/*" hidden multiple></label>
       <p class="muted small">Screenshot a north-up onX view (satellite, hybrid, or topo), add it here, then drag the orange corners until roads/sloughs line up. Lower opacity to compare against live imagery.</p>
-      ${P.overlays.map((o) => `
+      ${[...new Set(P.overlays.filter((o) => o.group).map((o) => o.group))].map((g) => {
+        const os = P.overlays.filter((o) => o.group === g), vis = os.filter((o) => o.visible).length, an = os.filter((o) => o.analysis).length;
+        return `<div class="card hl" data-group="${esc(g)}" style="margin:8px 0 0">
+          <div class="row"><input type="checkbox" class="gvis" ${vis ? "checked" : ""}><label><b>${esc(g)}</b> <span class="muted small">(${os.length} placed photos, ${vis} shown)</span></label><button class="btn small danger gdel">✕</button></div>
+          <div class="row"><span class="small muted">Opacity</span><input type="range" class="gop" min="0.05" max="1" step="0.05" value="${os[0].opacity}"></div>
+          <div class="btn-row"><button class="btn small gzoom">Zoom</button><button class="btn small gana">${an ? `Re-analyze all (${an}/${os.length} done)` : "Analyze all for openings/water"}</button>${an ? `<label class="small"><input type="checkbox" class="gshow" ${os.some((o) => o.analysis && o.analysis.show) ? "checked" : ""}> show analysis</label>` : ""}</div>
+          <div class="small muted gprog"></div>
+        </div>`;
+      }).join("")}
+      ${P.overlays.filter((o) => !o.group).map((o) => `
         <div class="card" data-id="${o.id}" style="margin:8px 0 0">
           <div class="row"><input type="checkbox" class="vis" ${o.visible ? "checked" : ""}><label>${esc(o.name)}</label>
             <button class="btn small edit ${overlayEdit === o.id ? "on" : ""}">${overlayEdit === o.id ? "Lock" : "Align"}</button>
@@ -669,6 +679,30 @@
         </div>`).join("")}
       <p class="muted small">Align the screenshot first, then press <b>Analyze</b>. It marks openings (fields, cutovers, roads) and water by color and texture, and Auto-Scout uses them for rifle lanes and newer cuts. Satellite or hybrid screenshots work best. Topo screenshots won't analyze well.</p>`;
     $("#ovFile").onchange = async (e) => { for (const f of e.target.files) await addOverlay(f); e.target.value = ""; };
+    $$("[data-group]", el).forEach((card) => {
+      const g = card.dataset.group, os = () => P.overlays.filter((o) => o.group === g);
+      $(".gvis", card).onchange = (e) => { os().forEach((o) => { o.visible = e.target.checked && !o.isOverview; }); save(); renderOverlaysOnMap(); renderOverlayList(); };
+      $(".gop", card).oninput = (e) => { os().forEach((o) => { o.opacity = +e.target.value; const im = overlayObjs.get(o.id); if (im) im.setOpacity(o.opacity); }); save(); };
+      $(".gzoom", card).onclick = () => { const b = L.latLngBounds(os().flatMap((o) => o.bounds)); map.fitBounds(b); };
+      if ($(".gshow", card)) $(".gshow", card).onchange = (e) => { os().forEach((o) => { if (o.analysis) o.analysis.show = e.target.checked; }); save(); renderOverlaysOnMap(); };
+      $(".gdel", card).onclick = async () => {
+        if (!confirm(`Delete all ${os().length} photos in "${g}"?`)) return;
+        for (const o of os()) { if (o.analysis) await store.delBlob(o.analysis.blobKey); await store.delBlob(o.blobKey); }
+        P.overlays = P.overlays.filter((o) => o.group !== g); save(); renderOverlaysOnMap(); renderOverlayList();
+      };
+      $(".gana", card).onclick = async () => {
+        const list = os().filter((o) => !o.isOverview), prog = $(".gprog", card);
+        for (let i = 0; i < list.length; i++) {
+          const o = list[i]; prog.textContent = `Analyzing ${i + 1}/${list.length}: ${o.name}`;
+          const r = await WS.cover.analyzeScreenshot(await store.getBlob(o.blobKey), { edge: 0.01 });
+          if (o.analysis) { WS.cover.forgetShot(o); await store.delBlob(o.analysis.blobKey); }
+          const key = "an_" + uid(); await store.setBlob(key, r.pngBlob);
+          o.analysis = { blobKey: key, pct: r.pct, show: false, at: new Date().toISOString() };
+        }
+        save(); renderOverlaysOnMap(); renderOverlayList();
+        toast(`Analyzed ${list.length} photos. Auto-Scout will use their openings and water.`);
+      };
+    });
     $$("[data-id]", el).forEach((row) => {
       const o = P.overlays.find((x) => x.id === row.dataset.id);
       $(".vis", row).onchange = (e) => { o.visible = e.target.checked; save(); renderOverlaysOnMap(); };
@@ -1176,11 +1210,11 @@
     p.innerHTML = `
       <h3>Import</h3>
       <div class="card">
-        <label class="btn accent file-btn">📂 Import files<input type="file" id="impFile" multiple accept=".kml,.kmz,.gpx,.geojson,.json,image/*" hidden></label>
+        <label class="btn accent file-btn">📂 Import files<input type="file" id="impFile" multiple accept=".kml,.kmz,.gpx,.geojson,.json,.txt,.md,image/*" hidden></label>
         <p class="small">• <b>onX</b>: export waypoints/tracks/areas as <b>KML</b> or <b>GPX</b> (onX Web Map → My Content → select → Export). KMZ and GeoJSON also work.<br>
         • <b>Images</b> (PNG/JPG screenshots of onX satellite/topo/hybrid) become draggable map overlays.<br>
         • <b>.json</b> backups from this app restore everything.</p>
-        ${P.name.includes("Ten Point") ? '<div class="btn-row"><button class="btn small" id="impIncluded">📥 Import my Ten Point onX export (included)</button></div>' : ""}
+        ${P.name.includes("Ten Point") ? '<div class="btn-row"><button class="btn small" id="impIncluded">📥 Add Ten Point unit boundary (+ your onX export if it is in data/onx)</button></div>' : ""}
         <div id="impOut" class="small muted"></div>
       </div>
       <h3>Export (send to onX / your hunting partner)</h3>
@@ -1209,10 +1243,21 @@
         <p class="muted">Elevation: AWS Terrain Tiles (USGS 3DEP and others). Imagery: Esri, USGS NAIP. Forecast: NWS. Rut model: MDWFP mean conception date (you enter it).</p>
       </div>`;
     if ($("#impIncluded")) $("#impIncluded").onclick = async () => {
+      const msgs = [];
       try {
-        const txt = await (await fetch("data/onx/ten-point-onx-export.kml")).text();
-        await importFiles([new File([txt], "ten-point-onx-export.kml", { type: "application/vnd.google-earth.kml+xml" })]);
-      } catch (e) { toast("Couldn't load it here. Open the app via GitHub Pages/localhost, or import data/onx/ten-point-onx-export.kml with Import files.", 6000); }
+        if (!P.features.some((f) => f.type === "boundary")) {
+          const k = await (await fetch("data/ten-point-boundary.kml")).text();
+          const gj = toGeoJSON.kml(new DOMParser().parseFromString(k, "text/xml"));
+          gj.features.flatMap(io.fromGeoJSON).forEach((f) => P.features.push(Object.assign({ day: "", status: "", photos: [] }, f)));
+          save(); renderFeatures(); msgs.push("🟦 Ten Point unit boundary added (Auto-Scout drops spots outside it)");
+        }
+      } catch (e) { msgs.push("Couldn't load the boundary. Open the app via GitHub Pages or localhost, or import data/ten-point-boundary.kml."); }
+      try {
+        const r = await fetch("data/onx/ten-point-onx-export.kml");
+        if (r.ok) await importFiles([new File([await r.text()], "ten-point-onx-export.kml", { type: "application/vnd.google-earth.kml+xml" })]);
+        else msgs.push("Your onX export isn't in the app folder. Import it from your computer with Import files.");
+      } catch (e) { msgs.push("Your onX export isn't in the app folder. Import it from your computer with Import files."); }
+      if (msgs.length) toast(msgs.join(" · "), 6000);
     };
     $("#impFile").onchange = (e) => importFiles([...e.target.files]).finally(() => (e.target.value = ""));
     $$("[data-x]", p).forEach((b) => (b.onclick = () => doExport(b.dataset.x)));
@@ -1220,11 +1265,73 @@
     $("#cacheBtn").onclick = cacheView;
     $("#resetAll").onclick = async () => { if (!confirm("Erase ALL properties, features, imports, overlays, photos and plans? (Make a backup first!)")) return; const keys = await store.allBlobKeys(); for (const k of keys || []) await store.delBlob(k); await store.set("state", DEFAULT_STATE()); location.reload(); };
   }
+  // ---- onX screenshot sets: coordinates.txt gives each file's map-center lat/lng + zoom
+  function parseTileIndex(txt) {
+    const idx = {};
+    const zm = txt.match(/Zoom\s+([\d.]+)/i), tileZoom = zm ? +zm[1] : null;
+    txt.split(/\r?\n/).forEach((line) => {
+      const m = line.match(/^\s*(\S+\.(?:png|jpe?g))\s+(-?\d{1,2}\.\d+)\s+(-?\d{1,3}\.\d+)/i);
+      if (m && tileZoom) idx[m[1]] = { lat: +m[2], lng: +m[3], zoom: tileZoom };
+    });
+    const ov = txt.match(/View center:\s*(-?\d+\.\d+),\s*(-?\d+\.\d+)[^#\n]*#([\d.]+)/i);
+    if (ov) {
+      const names = (txt.match(/\b[\w-]*overview[\w-]*\.(?:png|jpe?g)/gi) || []);
+      [...new Set(names)].forEach((n) => (idx[n] = { lat: +ov[1], lng: +ov[2], zoom: +ov[3], overview: true }));
+    }
+    return idx;
+  }
+  function parsePhotoNotes(md) {
+    const notes = {};
+    md.split(/^###\s+/m).slice(1).forEach((sec) => {
+      const name = sec.split(/\r?\n/)[0].trim();
+      if (/\.(png|jpe?g)$/i.test(name)) notes[name] = sec.split(/\r?\n/).slice(1).join(" ").replace(/\*\*/g, "").replace(/\s+/g, " ").trim();
+    });
+    return notes;
+  }
+  // onX web layout: 100 px left sidebar, tool column on the right, map centered in the remaining canvas; Mapbox 512 px tiles
+  async function addOnxTile(file, t, group) {
+    const bm = await createImageBitmap(file);
+    const W = bm.width, H = bm.height, dpr = W > 2400 ? W / 1920 : 1;
+    const side = Math.round(100 * dpr), right = Math.round(70 * dpr);
+    const mcx = (side + W) / 2, mcy = H / 2;
+    const Rm = 6378137, s = 40075016.686 / (512 * Math.pow(2, t.zoom)) / dpr;
+    const cx = (t.lng * Math.PI / 180) * Rm, cy = Math.log(Math.tan(Math.PI / 4 + (t.lat * Math.PI) / 360)) * Rm;
+    const unm = (x, y) => [(2 * Math.atan(Math.exp(y / Rm)) - Math.PI / 2) * 180 / Math.PI, (x / Rm) * 180 / Math.PI];
+    const x0 = side, x1 = W - right;
+    const sw = unm(cx + (x0 - mcx) * s, cy - (H - mcy) * s), ne = unm(cx + (x1 - mcx) * s, cy + mcy * s);
+    // crop off the onX chrome and shrink to keep storage reasonable
+    const scale = Math.min(1, 1100 / (x1 - x0));
+    const c = document.createElement("canvas"); c.width = Math.round((x1 - x0) * scale); c.height = Math.round(H * scale);
+    c.getContext("2d").drawImage(bm, x0, 0, x1 - x0, H, 0, 0, c.width, c.height);
+    const blob = await new Promise((res) => c.toBlob(res, "image/jpeg", 0.85));
+    const key = "ov_" + uid();
+    await store.setBlob(key, blob);
+    const o = { id: uid(), name: file.name, blobKey: key, bounds: [sw, ne], opacity: t.overview ? 0.6 : 0.85, visible: !t.overview, group, isOverview: !!t.overview, tile: { lat: t.lat, lng: t.lng, zoom: t.zoom } };
+    P.overlays.push(o);
+    return o;
+  }
+
   async function importFiles(files) {
     const out = $("#impOut"), msgs = [];
+    // index files first so images in the same batch can be placed automatically
+    for (const file of files.filter((f) => /\.txt$/i.test(f.name))) {
+      const idx = parseTileIndex(await file.text());
+      if (Object.keys(idx).length) { P.tileIndex = Object.assign(P.tileIndex || {}, idx); msgs.push(`📍 ${file.name}: coordinates for ${Object.keys(idx).length} photos`); }
+    }
+    for (const file of files.filter((f) => /\.md$/i.test(f.name))) {
+      const n = parsePhotoNotes(await file.text());
+      if (Object.keys(n).length) { P.photoNotes = Object.assign(P.photoNotes || {}, n); msgs.push(`📝 ${file.name}: notes for ${Object.keys(n).length} photos (shown with nearby Auto-Scout spots)`); }
+    }
+    const group = `onX photos ${new Date().toLocaleDateString()}`;
+    let placed = 0;
     for (const file of files) {
       try {
-        if (file.type.startsWith("image/")) { await addOverlay(file); msgs.push(`🖼️ ${file.name}: overlay added. Align it on the map`); continue; }
+        if (/\.(txt|md|csv)$/i.test(file.name)) continue;
+        if (file.type.startsWith("image/")) {
+          const t = P.tileIndex && P.tileIndex[file.name];
+          if (t) { await addOnxTile(file, t, group); placed++; continue; }
+          await addOverlay(file); msgs.push(`🖼️ ${file.name}: overlay added. Align it on the map`); continue;
+        }
         const r = await io.readGeoFile(file);
         if (r.backup) { await restore(r.backup); msgs.push(`💾 Restored backup ${file.name}`); continue; }
         if (r.canopy) { await attachCanopy(r.canopy); msgs.push(`🌳 ${file.name}: canopy height loaded into ${P.name}`); continue; }
@@ -1237,6 +1344,12 @@
         msgs.push(`✅ ${file.name}: ${n} features. See Layers → Imported (use Convert to make them editable)`);
       } catch (e) { msgs.push(`❌ ${file.name}: ${e.message}`); }
     }
+    if (placed) {
+      save(); await renderOverlaysOnMap(); renderOverlayList();
+      const b = L.latLngBounds(P.overlays.filter((o) => o.group === group && !o.isOverview).flatMap((o) => o.bounds));
+      if (b.isValid()) map.fitBounds(b);
+      msgs.push(`🗺️ Placed ${placed} onX photos at their exact coordinates (group "${group}" on the Layers tab)`);
+    } else if (P.tileIndex) save();
     if (out) out.innerHTML = msgs.map(esc).join("<br>");
     toast(msgs[msgs.length - 1] || "Nothing imported");
   }
@@ -1331,6 +1444,17 @@
       toast(`Found ${r.candidates.length} spots worth a look`);
     } catch (e) { out.innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`; }
   }
+  function photoNoteFor(ll) {
+    if (!P.photoNotes || !P.tileIndex) return null;
+    let best = null;
+    Object.entries(P.photoNotes).forEach(([name, text]) => {
+      const t = P.tileIndex[name];
+      if (!t || t.overview) return;
+      const d = geo.dist(ll, [t.lat, t.lng]);
+      if (d < 650 && (!best || d < best.d)) best = { name, text, d };
+    });
+    return best;
+  }
   function renderSpots() {
     const el = $("#panel-spots"), A = P.auto;
     const scoutDays = H.days.filter((d) => d.kind === "scout");
@@ -1342,6 +1466,7 @@
         <div class="field"><span>Hunting with</span><div class="btn-row">${Object.values(WS.autoscout.WEAPONS).map((wp) => `<button class="btn ${curWeapon() === wp.key ? "on" : ""}" data-wpn="${wp.key}">${wp.icon} ${wp.label}</button>`).join("")}</div>
           <div class="small muted">${({ bow: "Ranks tight funnels, crossings, and thick-cover edges where deer pass within 15–30 yd. Setups are trees to hang in, with shooting lanes to trim.", muzzle: "Ranks funnels you can cover out to about 150 yd, using openings within that range.", rifle: "Ranks funnels plus openings and cutovers out to about 350 yd for longer shots." })[curWeapon()]}</div></div>
         <div class="row"><span class="small muted">Terrain</span><b class="small">${TERRAIN_STYLES[P.terrainStyle]}</b><button class="btn small" id="toProp2">change</button></div>
+        <div class="row small"><span class="muted">Unit boundary</span>${P.features.some((f) => f.type === "boundary") ? '<span class="pill good">🟦 mapped. Spots outside are dropped</span>' : '<span class="pill warn">not mapped</span>'}</div>
         <div class="row small"><span class="muted">Cover data</span>${P.canopy ? '<span class="pill good">🌳 canopy height loaded</span>' : '<span class="pill warn">no canopy data</span>'}${P.overlays.filter((o) => o.analysis).length ? `<span class="pill good">📷 ${P.overlays.filter((o) => o.analysis).length} screenshot(s) analyzed</span>` : ""}<button class="btn small" id="toLayers">${P.canopy ? "view" : "add"}</button></div>
         ${P.canopy ? "" : '<p class="small muted">Without cover data, Auto-Scout uses terrain only. Add canopy height on the Layers tab to find thick bedding cover, edges, and rifle openings.</p>'}
         ${P.terrainStyle !== "hill" ? `<div class="row"><span class="small muted">Low/wet ground = lowest</span><input type="range" id="wetPct" min="15" max="60" step="5" value="${spotOpts.wetPct}"><span class="small" id="wetV">${spotOpts.wetPct}%</span></div>
@@ -1361,6 +1486,7 @@
         <div class="row"><span style="background:${KIND_COLOR[c.kind]};color:#fff;border-radius:50%;width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:12px">${i + 1}</span>
           <strong style="flex:1">${KIND_ICON[c.kind] || ""} ${esc(c.title)}</strong><span class="score" style="font-size:16px">${c.score}</span></div>
         <ul class="small" style="padding-left:18px;margin:6px 0">${c.reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>
+        ${(() => { const pn = photoNoteFor(c.coords); return pn ? `<details class="small"><summary>📷 Photo notes, ${esc(pn.name)}</summary><p>${esc(pn.text)}</p></details>` : ""; })()}
         ${c.setup ? `<p class="small"><b>${(WS.autoscout.WEAPONS[A.stats.weapon] || WS.autoscout.WEAPONS.rifle).icon} ${(WS.autoscout.WEAPONS[A.stats.weapon] || WS.autoscout.WEAPONS.rifle).label} setup:</b> ${esc(c.setup)}</p><p class="small"><b>Winds that work:</b> ${c.windNote ? esc(c.windNote) : (c.goodWinds || []).map((w) => `<span class="pill good">${w}</span>`).join("") || '<span class="pill bad">none clean. Scout it, then hunt the edges</span>'}</p>` : ""}
         <div class="btn-row">
           <button class="btn small" data-zoom="${i}">Zoom</button>

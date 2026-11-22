@@ -1,5 +1,5 @@
 /* Offline support: app shell is network-first (so updates land), map/elevation tiles are cache-first. */
-const APP_CACHE = "scout-hub-app-v4";
+const APP_CACHE = "scout-hub-app-v5";
 const TILE_CACHE = "scout-hub-tiles-v1";
 const APP_FILES = ["./", "index.html", "styles.css", "manifest.webmanifest", "js/core.js", "js/astro.js", "js/terrain.js", "js/analysis.js", "js/cover.js", "js/autoscout.js", "js/io.js", "js/app.js",
   "vendor/leaflet.js", "vendor/leaflet.css", "vendor/togeojson.umd.js", "vendor/jszip.min.js"];
